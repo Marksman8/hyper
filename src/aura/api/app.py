@@ -259,13 +259,19 @@ def _install_routes(app: FastAPI) -> None:
 
         if body.stream:
             return StreamingResponse(
-                _sse(state.orchestrator, body.message, body.session_id, params),
+                _sse(
+                    state.orchestrator,
+                    body.message,
+                    body.session_id,
+                    params,
+                    spoken=body.spoken,
+                ),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
         result = await state.orchestrator.chat(
-            body.message, session_id=body.session_id, params=params
+            body.message, session_id=body.session_id, params=params, spoken=body.spoken
         )
         return ChatResponse(
             session_id=result.session_id,
@@ -451,6 +457,7 @@ async def _sse(
     session_id: str | None,
     params: GenerationParams,
     openai_shape: bool = False,
+    spoken: bool = False,
 ) -> AsyncIterator[str]:
     """Server-sent events for a streaming turn.
 
@@ -461,7 +468,9 @@ async def _sse(
     created = int(time.time())
     sent_session = False
     try:
-        async for chunk in orchestrator.stream(user_text, session_id=session_id, params=params):
+        async for chunk in orchestrator.stream(
+            user_text, session_id=session_id, params=params, spoken=spoken
+        ):
             # Do NOT break here. The orchestrator's generator persists the
             # assistant turn after its final yield; abandoning it mid-flight
             # means that epilogue never runs.

@@ -22,6 +22,9 @@ class ChatRequest(BaseModel):
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_p: float | None = Field(default=None, gt=0.0, le=1.0)
     max_tokens: int | None = Field(default=None, gt=0, le=32_768)
+    # The reply will be spoken, so ask the model for prose rather than
+    # markdown. A client that renders text should leave this false.
+    spoken: bool = False
 
 
 class UsageOut(BaseModel):

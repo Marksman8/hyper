@@ -58,7 +58,12 @@ class CoreClient:
         Raises CoreUnavailableError if Core cannot be reached, so the caller
         can say something useful out loud instead of failing silently.
         """
-        payload: dict[str, object] = {"message": text, "stream": True}
+        # Ask Core to shape the reply for the ear, not the eye.
+        payload: dict[str, object] = {
+            "message": text,
+            "stream": True,
+            "spoken": True,
+        }
         if self.session_id:
             payload["session_id"] = self.session_id
 

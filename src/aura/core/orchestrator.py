@@ -97,7 +97,7 @@ class Orchestrator:
 
     # -- prompt assembly -----------------------------------------------------
 
-    async def _system_messages(self) -> list[Message]:
+    async def _system_messages(self, *, spoken: bool = False) -> list[Message]:
         """System prompt plus whatever AURA durably knows about the user.
 
         Facts are injected as text rather than fine-tuned in (spec section 15:
@@ -106,6 +106,8 @@ class Orchestrator:
         leaks into every future conversation.
         """
         parts = [self._settings.persona.system_prompt.strip()]
+        if spoken:
+            parts.append(self._settings.persona.voice_system_prompt.strip())
 
         facts = await self._store.list_facts(scope="user")
         relevant = [
@@ -120,7 +122,7 @@ class Orchestrator:
 
         return [Message(role=Role.SYSTEM, content="\n\n".join(parts))]
 
-    async def _assemble(self, session_id: str) -> list[Message]:
+    async def _assemble(self, session_id: str, *, spoken: bool = False) -> list[Message]:
         """Build the prompt from the system message plus stored history.
 
         The current user message is NOT appended here: _open_turn has already
@@ -130,14 +132,14 @@ class Orchestrator:
         history = await self._store.recent_turns(session_id, self._settings.memory.history_turns)
         history = build_history(history, self._settings.memory.history_char_budget)
 
-        messages = await self._system_messages()
+        messages = await self._system_messages(spoken=spoken)
         messages += [t.to_message() for t in history]
         return messages
 
     # -- turn execution ------------------------------------------------------
 
     async def _open_turn(
-        self, session_id: str | None, user_text: str
+        self, session_id: str | None, user_text: str, *, spoken: bool = False
     ) -> tuple[Session, list[Message]]:
         """Shared prologue for streaming and non-streaming turns."""
         self._guard()
@@ -145,7 +147,7 @@ class Orchestrator:
         bind_session_id(session.id)
 
         await self._store.add_turn(Turn(session_id=session.id, role=Role.USER, content=user_text))
-        messages = await self._assemble(session.id)
+        messages = await self._assemble(session.id, spoken=spoken)
         return session, messages
 
     async def chat(
@@ -154,8 +156,9 @@ class Orchestrator:
         *,
         session_id: str | None = None,
         params: GenerationParams | None = None,
+        spoken: bool = False,
     ) -> TurnResult:
-        session, messages = await self._open_turn(session_id, user_text)
+        session, messages = await self._open_turn(session_id, user_text, spoken=spoken)
         started = time.perf_counter()
 
         try:
@@ -219,6 +222,7 @@ class Orchestrator:
         *,
         session_id: str | None = None,
         params: GenerationParams | None = None,
+        spoken: bool = False,
     ) -> AsyncIterator[ChatChunk]:
         """Stream a turn, persisting the assistant message once complete.
 
@@ -226,7 +230,7 @@ class Orchestrator:
         the user saw and reacted to is part of the conversation, and silently
         dropping it desynchronises AURA's memory from the user's.
         """
-        session, messages = await self._open_turn(session_id, user_text)
+        session, messages = await self._open_turn(session_id, user_text, spoken=spoken)
         started = time.perf_counter()
         collected: list[str] = []
         reasoning: list[str] = []

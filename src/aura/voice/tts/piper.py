@@ -31,7 +31,10 @@ _INT16_MAX = 32768.0
 # runs on a partial LLM stream, so it must not need a parser, a model, or the
 # rest of the sentence. Abbreviations occasionally split early, which costs a
 # slightly odd pause and nothing else.
-_SENTENCE_END = re.compile(r"(?<=[.!?])\s+|(?<=[.!?])$|(?<=[;:])\s+")
+# Newlines count as boundaries too. A markdown heading or list item has
+# no terminating punctuation, so without this a whole list accumulates
+# into one breathless chunk before anything is spoken.
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+|(?<=[.!?])$|(?<=[;:])\s+|\n+")
 
 # Trailing forms that end in a period without ending a sentence. Checked
 # instead of a minimum length, because a length rule swallows the short

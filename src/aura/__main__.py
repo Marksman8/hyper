@@ -260,8 +260,7 @@ def voice() -> None:
         VoiceState.SLEEP: "[dim]zzz[/dim]",
         VoiceState.LISTENING: "[bold green]listening[/bold green]",
         VoiceState.FOLLOW_UP: (
-            "[bold green]still listening[/bold green] "
-            "[dim](no wake word needed)[/dim]"
+            "[bold green]still listening[/bold green] [dim](no wake word needed)[/dim]"
         ),
         VoiceState.THINKING: "[yellow]thinking[/yellow]",
         VoiceState.SPEAKING: "[cyan]speaking[/cyan]",

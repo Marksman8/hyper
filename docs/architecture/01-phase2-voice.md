@@ -155,7 +155,39 @@ on Windows, which is a real setup burden for ~200 ms. With 4.9 GB VRAM free the
 GPU is available if it becomes worth it — the `STTProvider` seam means that is
 a config change, not a rewrite.
 
-## 8. Out of scope for Phase 2
+## 8. Writing for the ear
+
+Models write for the eye. Asked to compare two things, this one produced
+headings, bold runs and bullet lists, and Piper read the syntax aloud -- "star
+star", "hash hash" -- through an otherwise correct answer.
+
+Two defences, and both are needed:
+
+1. **Ask for prose.** `/v1/chat` takes `spoken: true`, and the orchestrator
+   appends `persona.voice_system_prompt`. This fixes the *shape* of the
+   answer. Measured on the same question:
+
+   > *written*: "A Large Language Model (LLM) is a deep learning model trained
+   > primarily on text data to generate, understand, and predict human
+   > language. Its core capability is processing tokens..."
+   >
+   > *spoken*: "A large language model only understands text while a visual
+   > language model can also see images. The key difference is that one
+   > processes only words and the other processes both."
+
+2. **Strip what arrives anyway.** `voice/tts/normalize.py` removes markup and
+   expands symbols before synthesis. Prompting is a request, not a guarantee,
+   and a 4B model forgets under pressure.
+
+The normaliser is deliberately conservative: markup and unambiguous symbols
+only. It does not touch numbers, dates or units -- Piper handles those, and
+guessing badly is worse than leaving them alone.
+
+Sentence splitting also treats a newline as a boundary, because a heading or
+list item carries no terminating punctuation and would otherwise accumulate
+into one breathless chunk before anything was spoken.
+
+## 9. Out of scope for Phase 2
 
 Speaker identification · multi-language · emotion · voice cloning · always-on
 transcription. Wake-word-gated only: the mic stream is open, but nothing is

@@ -240,6 +240,21 @@ class VoiceConfig(_Section):
 class PersonaConfig(_Section):
     name: str = "AURA"
     system_prompt: str = "You are AURA, a local-first personal AI assistant."
+    # Appended when the reply will be spoken. Models write for the eye by
+    # default: asked to compare two things they produce headings, bold runs and
+    # bullet lists, which a synthesiser reads out as "hash hash" and "star
+    # star". Stripping the markup afterwards fixes the symbols but not the
+    # shape - a bulleted spec sheet read aloud is still a bad answer.
+    voice_system_prompt: str = (
+        "This reply will be spoken aloud, so write it to be heard, not read.\n"
+        "- Plain sentences only. No markdown, headings, bullet points, "
+        "asterisks, or code blocks.\n"
+        "- Keep it short: two or three sentences unless more is genuinely "
+        "needed. The listener cannot skim.\n"
+        "- Spell out what a symbol would mean rather than using the symbol.\n"
+        "- If something truly needs a list, say it as prose: 'there are three: "
+        "first ..., second ..., third ...'."
+    )
 
 
 class _YamlSource(PydanticBaseSettingsSource):

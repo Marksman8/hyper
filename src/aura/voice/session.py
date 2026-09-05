@@ -33,6 +33,7 @@ from aura.voice.audio.playback import Speaker
 from aura.voice.core_client import CoreClient, CoreUnavailableError
 from aura.voice.stt.base import STTProvider
 from aura.voice.tts.base import TTSProvider
+from aura.voice.tts.normalize import for_speech
 from aura.voice.tts.piper import SentenceStreamer
 from aura.voice.types import SAMPLE_RATE, AudioArray, TurnTimings, VoiceState
 from aura.voice.vad import BargeInDetector, Endpointer
@@ -408,10 +409,19 @@ class VoiceSession:
             )
 
     def _speak(self, text: str, timings: TurnTimings, turn_started: float, first: bool) -> bool:
-        """Synthesise and queue one sentence. True if audio was produced."""
+        """Synthesise and queue one sentence. True if audio was produced.
+
+        The text is normalised for speech first. The prompt asks the model for
+        prose, but prompting is a request rather than a guarantee, and a
+        synthesiser handed `**bold**` says "star star bold star star".
+        """
+        spoken_text = for_speech(text)
+        if not spoken_text:
+            # Markup with nothing behind it - a lone bullet or a rule.
+            return False
         produced = False
         started = time.perf_counter()
-        for chunk in self._tts.synthesize(text):
+        for chunk in self._tts.synthesize(spoken_text):
             if self._interrupt.is_set():
                 return produced
             if not produced:
