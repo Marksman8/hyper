@@ -75,8 +75,11 @@ CREATE TABLE IF NOT EXISTS audit (
     actor            TEXT NOT NULL,
     action           TEXT NOT NULL,
     permission_level INTEGER NOT NULL DEFAULT 0,
+    -- 'confirm' means the action was refused for want of a human approval.
+    -- It was missing from this constraint until Phase 3, which made every
+    -- confirmation-gated refusal raise instead of refusing cleanly.
     decision         TEXT NOT NULL DEFAULT 'allow'
-                     CHECK (decision IN ('allow','deny','error')),
+                     CHECK (decision IN ('allow','confirm','deny','error')),
     target           TEXT,
     request_id       TEXT,
     session_id       TEXT,

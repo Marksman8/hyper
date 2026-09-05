@@ -84,3 +84,21 @@ persona:
     - You have no ability to execute code, browse the web, see the screen, or
       modify files. Do not claim otherwise or pretend to perform actions.
     - Prefer concrete specifics over hedged generalities.
+
+tools:
+  # Phase 3. Tools exist and are permission-gated, but the model does not
+  # choose them yet - that is Phase 4.
+  enabled: true
+  # Directories AURA may read or write. Deliberately empty by default: an
+  # unconfigured assistant should be able to touch nothing, not everything.
+  # Add your project directories here.
+  workspace_roots: []
+  # Extra refusals inside those roots. Empty uses the built-in list, which
+  # already covers .env, var/secrets, *.pem, id_rsa and .ssh.
+  deny_patterns: []
+  # 1 = read-only without asking. Writing a file or running Python is level 2
+  # and needs an explicit human confirmation on every call.
+  max_autonomous_level: 1
+  max_confirmable_level: 3
+  python_enabled: true
+  default_timeout_s: 30.0

@@ -28,8 +28,58 @@ from aura.logging import get_logger
 
 log = get_logger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring an existing database up to SCHEMA_VERSION.
+
+    `CREATE TABLE IF NOT EXISTS` silently leaves an older table alone, so a
+    changed CHECK constraint needs an explicit rebuild. SQLite cannot alter a
+    constraint in place; copying through a new table is the supported way.
+    """
+    row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
+    current = int(row["v"] or 0)
+    if current >= SCHEMA_VERSION:
+        return
+
+    if current < 2:
+        # v2 widened audit.decision to include 'confirm'.
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='audit'"
+        ).fetchone()
+        if sql and "'confirm'" not in (sql["sql"] or ""):
+            log.info("memory.migrating", from_version=current, to_version=2)
+            conn.executescript(
+                """
+                PRAGMA foreign_keys = OFF;
+                BEGIN;
+                CREATE TABLE audit_v2 (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts               REAL NOT NULL,
+                    actor            TEXT NOT NULL,
+                    action           TEXT NOT NULL,
+                    permission_level INTEGER NOT NULL DEFAULT 0,
+                    decision         TEXT NOT NULL DEFAULT 'allow'
+                                     CHECK (decision IN ('allow','confirm','deny','error')),
+                    target           TEXT,
+                    request_id       TEXT,
+                    session_id       TEXT,
+                    detail_json      TEXT NOT NULL DEFAULT '{}'
+                );
+                INSERT INTO audit_v2
+                    SELECT id, ts, actor, action, permission_level, decision,
+                           target, request_id, session_id, detail_json
+                    FROM audit;
+                DROP TABLE audit;
+                ALTER TABLE audit_v2 RENAME TO audit;
+                CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(ts DESC);
+                CREATE INDEX IF NOT EXISTS idx_audit_request ON audit(request_id);
+                COMMIT;
+                PRAGMA foreign_keys = ON;
+                """
+            )
 
 
 def _loads(raw: str | None) -> dict[str, Any]:
@@ -62,6 +112,7 @@ class MemoryStore:
         )
         conn.row_factory = sqlite3.Row
         conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        _migrate(conn)
         conn.execute(
             "INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (?, ?)",
             (SCHEMA_VERSION, time.time()),

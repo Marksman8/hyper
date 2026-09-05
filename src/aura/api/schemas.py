@@ -129,6 +129,38 @@ class StatusResponse(BaseModel):
     resources: ResourceStatus
 
 
+class ToolSpecOut(BaseModel):
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    level: int
+    level_label: str
+    timeout_s: float
+    reversible: bool
+    # True when this tool cannot run without an explicit human confirmation
+    # under the current policy. Clients render the approval prompt from this.
+    needs_confirmation: bool
+
+
+class ToolCallRequest(BaseModel):
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    # Must be set deliberately by whoever is approving. The executor treats an
+    # unset flag as a refusal, never as consent.
+    confirmed: bool = False
+    session_id: str | None = None
+
+
+class ToolCallResponse(BaseModel):
+    call_id: str
+    name: str
+    ok: bool
+    content: str = ""
+    error: str | None = None
+    data: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: int = 0
+    decision: str = "allow"
+
+
 class EStopRequest(BaseModel):
     engaged: bool
 

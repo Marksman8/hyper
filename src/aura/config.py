@@ -294,6 +294,35 @@ class VoiceConfig(_Section):
     tts: TTSConfig = Field(default_factory=TTSConfig)
 
 
+class ToolsConfig(_Section):
+    """Phase 3. What AURA may touch, and how far it may go unattended."""
+
+    enabled: bool = True
+    # Allow-list of directories tools may read or write. Empty means no path
+    # is accessible at all - a deliberate default, since an unconfigured
+    # assistant should be able to do nothing rather than everything.
+    workspace_roots: list[str] = Field(default_factory=list)
+    # Refused even inside a root. Empty means use the built-in list in
+    # tools/workspace.py, which covers .env, var/secrets, keys and .ssh.
+    deny_patterns: list[str] = Field(default_factory=list)
+    # The highest permission level AURA may use without asking. LEVEL 1 is
+    # read-only: writes and code execution need a human first.
+    max_autonomous_level: int = Field(default=1, ge=0, le=4)
+    # The ceiling a human confirmation can raise it to. LEVEL 4 stays out of
+    # reach entirely until there is a UI that can explain what it is approving.
+    max_confirmable_level: int = Field(default=3, ge=0, le=4)
+    python_enabled: bool = True
+    default_timeout_s: float = Field(default=30.0, gt=0.0, le=600.0)
+
+    def resolved_roots(self) -> tuple[str, ...]:
+        """Workspace roots as absolute paths."""
+        out: list[str] = []
+        for raw in self.workspace_roots:
+            path = Path(raw).expanduser()
+            out.append(str(path if path.is_absolute() else PROJECT_ROOT / path))
+        return tuple(out)
+
+
 class PersonaConfig(_Section):
     name: str = "AURA"
     system_prompt: str = "You are AURA, a local-first personal AI assistant."
@@ -360,6 +389,7 @@ class Settings(BaseSettings):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    tools: ToolsConfig = Field(default_factory=ToolsConfig)
 
     @classmethod
     def settings_customise_sources(

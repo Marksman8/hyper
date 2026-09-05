@@ -126,6 +126,8 @@ drive your GPU on 127.0.0.1:8081.
 | `DELETE` | `/v1/memory/{key}` | forget a fact |
 | `POST` | `/v1/control/estop` | emergency stop |
 | `GET` | `/v1/audit` | why AURA did what it did |
+| `GET` | `/v1/tools` | what AURA can do, and what needs approval |
+| `POST` | `/v1/tools/{name}` | run one tool (`confirmed: true` for level 2+) |
 
 Interactive docs at <http://127.0.0.1:8760/docs>.
 

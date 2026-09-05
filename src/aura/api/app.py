@@ -29,6 +29,9 @@ from aura.api.schemas import (
     ResourceStatus,
     SessionOut,
     StatusResponse,
+    ToolCallRequest,
+    ToolCallResponse,
+    ToolSpecOut,
     TurnOut,
     UsageOut,
 )
@@ -64,6 +67,7 @@ class AppState:
     orchestrator: Orchestrator
     token: str
     started_at: float
+    tools: Any = None
 
 
 def get_state(request: Request) -> AppState:
@@ -94,6 +98,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         token = load_or_create_token(cfg.security.resolved_token_file(), cfg.security.api_token)
 
+        tools = None
+        if cfg.tools.enabled:
+            from aura.tools.factory import build_executor
+
+            tools = build_executor(cfg, audit)
+
         app.state.aura = AppState(
             settings=cfg,
             store=store,
@@ -101,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             orchestrator=Orchestrator(cfg, provider, store, audit),
             token=token,
             started_at=time.time(),
+            tools=tools,
         )
 
         health = await provider.health()
@@ -118,6 +129,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            if tools is not None:
+                tools.close()
             await provider.close()
             store.close()
             log.info("aura.stopped")
@@ -427,6 +440,61 @@ def _install_routes(app: FastAPI) -> None:
         if not deleted:
             raise NotFoundError("Nothing remembered under key " + repr(key))
         return {"deleted": True}
+
+    # -- tools (spec section 8) ----------------------------------------------
+
+    @app.get("/v1/tools", response_model=list[ToolSpecOut], tags=["tools"])
+    async def list_tools(state: AppState = Depends(get_state)) -> list[ToolSpecOut]:
+        """What AURA can do, and what needs approval first."""
+        if state.tools is None:
+            return []
+        from aura.security.permissions import Decision
+
+        policy = state.tools._policy
+        return [
+            ToolSpecOut(
+                name=spec.name,
+                description=spec.description,
+                parameters=spec.parameters,
+                level=int(spec.level),
+                level_label=spec.level.label,
+                timeout_s=spec.timeout_s,
+                reversible=spec.reversible,
+                needs_confirmation=policy.evaluate(spec.level) is Decision.CONFIRM,
+            )
+            for spec in state.tools._registry.specs()
+        ]
+
+    @app.post("/v1/tools/{name}", response_model=ToolCallResponse, tags=["tools"])
+    async def call_tool(
+        name: str, body: ToolCallRequest, state: AppState = Depends(get_state)
+    ) -> ToolCallResponse:
+        """Run one tool.
+
+        Phase 3 only: the caller chooses the tool. Wiring this into the model's
+        own reasoning is Phase 4, and the permission gate exists so that
+        arriving does not change what is allowed.
+        """
+        if state.tools is None:
+            raise NotFoundError("Tools are disabled (tools.enabled is false).")
+
+        from aura.tools.factory import build_context
+        from aura.tools.types import ToolCall
+
+        result = await state.tools.execute(
+            ToolCall(name=name, arguments=body.arguments, confirmed=body.confirmed),
+            build_context(state.settings, body.session_id),
+        )
+        return ToolCallResponse(
+            call_id=result.call_id,
+            name=result.name,
+            ok=result.ok,
+            content=result.content,
+            error=result.error,
+            data=result.data,
+            duration_ms=result.duration_ms,
+            decision=result.decision,
+        )
 
     # -- control & observability ---------------------------------------------
 
