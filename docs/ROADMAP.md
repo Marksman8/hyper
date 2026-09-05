@@ -45,22 +45,31 @@ recorded in the architecture doc's budget table.
 
 ---
 
-## Phase 2 — Voice
+## Phase 2 — Voice  🔨 in progress
 
-Wake word → STT → AURA → TTS, with barge-in.
+Wake word → STT → AURA → TTS, with barge-in. Runs as its own process; AURA Core
+is untouched and gains no dependency.
 
-- Wake word: openWakeWord (small, CPU, custom phrase) over Porcupine (better
-  accuracy, licence restrictions)
-- STT: faster-whisper `small.en` on GPU, **loaded on demand and evicted**
-- TTS: Piper (fast, CPU, low latency) as default; Kokoro if quality demands it
-- Barge-in: VAD-gated interruption of playback
+- Wake word: openWakeWord `hey_jarvis` (ONNX, CPU) — "aura" is not a
+  pretrained phrase; a custom model is an offline training job
+- VAD: Silero v6 ONNX, streaming with persistent state
+- STT: faster-whisper `base.en` int8 on CPU, load-on-demand with idle eviction
+- TTS: Piper `en_US-amy-medium` (female, ONNX, RTF 0.04)
+- Barge-in: sustained speech during playback cuts it immediately
 
-**This is where torch enters the project.** It is also the first phase that
-seriously competes for RAM — hence the eviction policy being in `runtime/`
-from v0.1.
+**Correction: torch does NOT enter here.** The roadmap originally said it did.
+openWakeWord, faster-whisper (CTranslate2) and Piper all run on onnxruntime, so
+the whole speech stack costs ~430 MB resident instead of ~2.5 GB of disk plus
+several hundred MB more. On a machine with under a gigabyte free that is the
+difference between voice being usable and not. Torch now enters at Phase 8.
+
+**Done so far**: audio capture/playback, real mic kill switch, streaming VAD,
+endpointing, barge-in, sentence-streamed TTS, STT, wake word, the session state
+machine, and `aura say` / `aura listen` / `aura voice`.
 
 **Exit criteria**: full voice loop under 1.5 s from end-of-speech to first
-audio; idle RAM returns to baseline within 60 s of the last utterance.
+audio, measured end to end with a real utterance; idle RAM returns to baseline
+within 60 s of the last utterance.
 
 ---
 
@@ -193,6 +202,7 @@ open and that is enough for now.
 These apply to every phase and override any feature request that conflicts:
 
 1. **One always-resident LLM.** Everything else loads on demand and is evicted.
+   Measured: AURA Core 69 MB, voice 430 MB, model server 3.07 GB VRAM.
 2. **No component may become unswappable.** Enforced by `tests/unit/test_seam.py`.
 3. **No autonomous self-modification.** Human approval gates every deploy.
 4. **Privacy controls stop pipelines, not prompts.**

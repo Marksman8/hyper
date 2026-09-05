@@ -144,6 +144,22 @@ def configure_logging(
         lg.handlers.clear()
         lg.propagate = True
 
+    # Third-party libraries that log every HTTP request at INFO. A model
+    # download would otherwise bury AURA's own events under a hundred lines of
+    # CDN redirects, which defeats the point of structured logging.
+    for noisy in (
+        "httpx",
+        "httpcore",
+        "huggingface_hub",
+        "filelock",
+        "faster_whisper",
+        "openwakeword",
+        "urllib3",
+    ):
+        logging.getLogger(noisy).setLevel(
+            logging.DEBUG if level.upper() == "DEBUG" else logging.WARNING
+        )
+
     _configured = True
 
 

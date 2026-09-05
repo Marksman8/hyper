@@ -7,19 +7,24 @@ AURA runs entirely on your own machine. Its intelligence comes from open-weight
 models served locally; no hosted API is required for normal operation, and the
 model underneath is a configuration value, not a code dependency.
 
-> **v0.1 scope.** Conversation, persistent memory, local API, CLI client.
-> No vision, voice, tools, or autonomous action yet — see
-> [the roadmap](docs/architecture/00-v0.1-architecture.md#9-explicitly-out-of-scope-for-v01).
+> **Current scope.** v0.1: conversation, persistent memory, local API, CLI.
+> Phase 2 (voice): wake word, speech in, speech out, barge-in.
+> No vision, tools, or autonomous action yet — see [the roadmap](docs/ROADMAP.md).
 
 ---
 
 ## Architecture in one picture
 
 ```
-  aura chat  (CLI)  ->  AURA Core :8760  ->  llama-server :8081  ->  GGUF on GPU
-                          |
-                          +-- orchestrator, memory (SQLite), auth, audit
+  aura chat  (CLI) ---+
+                      +--> AURA Core :8760 --> llama-server :8081 --> GGUF on GPU
+  aura voice --------+       |
+  (mic/speaker)              +-- orchestrator, memory (SQLite), auth, audit
 ```
+
+Three processes, each replaceable. Voice is a *client*, not a subsystem: it
+reaches AURA over the same authenticated HTTP API any other client uses, so
+Core stays a 69 MB torch-free process that restarts in under a second.
 
 Two processes on purpose: AURA Core restarts in under a second while the model
 stays loaded, and the boundary between them is an OpenAI-compatible wire
@@ -51,6 +56,15 @@ uv run python scripts/download_model.py
 powershell -ExecutionPolicy Bypass -File scripts/setup_llama_cpp.ps1
 ```
 
+### Voice (Phase 2, optional)
+
+```powershell
+uv sync --extra voice                             # onnxruntime + CTranslate2, no torch
+uv run python scripts/download_voice.py           # Piper voice, ~63 MB
+uv run python scripts/download_vad.py             # Silero VAD, ~2 MB
+uv run python scripts/download_wakeword.py        # openWakeWord models, ~10 MB
+```
+
 ## Running
 
 Two terminals.
@@ -70,6 +84,19 @@ uv run aura chat            # interactive
 uv run aura chat "hello"    # one shot
 uv run aura status          # health, model, RAM/VRAM
 ```
+
+With voice installed:
+
+```powershell
+uv run aura voice           # wake word -> listen -> answer aloud
+uv run aura say "hello"     # TTS only
+uv run aura listen          # mic -> VAD -> STT only
+uv run aura devices         # list audio devices
+```
+
+The wake word is **"hey jarvis"**. openWakeWord ships a fixed set of
+pretrained phrases and "aura" is not one of them; training a custom model is
+an offline job. Change it with `voice.wake.model`.
 
 **No GPU yet, or still downloading?** Set `AURA__LLM__PROVIDER=echo` in `.env`
 and everything above works against a stub backend. That is the point of the
@@ -121,6 +148,7 @@ src/aura/
   models/      LLMProvider interface + concrete providers
   security/    permission levels, tokens, audit policy
   runtime/     resource sampling, process supervision
+  voice/       wake word, VAD, STT, TTS, session loop (Phase 2)
   clients/     reference CLI client
 config/        default.yaml, models.yaml
 docs/          architecture and decision records

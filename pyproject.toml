@@ -24,6 +24,22 @@ dependencies = [
     "psutil>=6.1",
 ]
 
+[project.optional-dependencies]
+# Phase 2. An extra, not a core dependency: AURA Core must stay a fast-starting
+# 69 MB process, and the voice client is a separate process that happens to
+# live in the same repo. `uv sync --extra voice`.
+#
+# Note what is NOT here: torch. openWakeWord, faster-whisper (CTranslate2) and
+# Piper all run on onnxruntime, so the whole speech stack costs ~250 MB of
+# runtime instead of ~2.5 GB. Torch does not enter until Phase 8 (LoRA).
+voice = [
+    "sounddevice>=0.5",       # PortAudio bindings; mic capture + playback
+    "numpy>=2.1",             # audio buffers
+    "openwakeword>=0.6",      # wake word, ONNX
+    "faster-whisper>=1.1",    # STT via CTranslate2
+    "piper-tts>=1.2",         # TTS, ONNX
+]
+
 [project.scripts]
 aura = "aura.__main__:app"
 
@@ -35,6 +51,16 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "types-PyYAML",
+]
+
+[tool.uv]
+# openWakeWord 0.6 requires tflite-runtime on Linux, but tflite-runtime ships
+# no wheels past cp311 — so a universal resolution for Python 3.12 fails even
+# on Windows, where the dependency is irrelevant. Narrow the marker to the
+# environments where a wheel actually exists. AURA drives openWakeWord with
+# inference_framework="onnx" on every platform, so tflite is never loaded.
+override-dependencies = [
+    "tflite-runtime>=2.8.0; sys_platform == 'linux' and python_version < '3.12'",
 ]
 
 [build-system]
@@ -67,7 +93,16 @@ mypy_path = "src"
 packages = ["aura"]
 
 [[tool.mypy.overrides]]
-module = ["psutil.*"]
+module = [
+    "psutil.*",
+    # Speech backends ship no py.typed marker. Confined to the provider
+    # packages, which are the only modules allowed to import them anyway.
+    "sounddevice.*",
+    "openwakeword.*",
+    "faster_whisper.*",
+    "piper.*",
+    "onnxruntime.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

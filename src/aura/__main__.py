@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -88,6 +90,216 @@ def status() -> None:
     from aura.clients.cli import run_status
 
     asyncio.run(run_status())
+
+
+@app.command()
+def say(
+    text: str = typer.Argument(..., help="Text to speak."),
+    save: str = typer.Option("", "--save", help="Also write a WAV file here."),
+) -> None:
+    """Speak text with the configured TTS voice.
+
+    The smallest useful slice of Phase 2: proves the voice loads, synthesises
+    and reaches the speakers, without needing a microphone or the model server.
+    """
+    import time as _time
+
+    from aura.voice.factory import build_tts
+
+    cfg = get_settings()
+    configure_logging(level=cfg.logging.level, fmt=cfg.logging.format)
+
+    tts = build_tts(cfg)
+    started = _time.perf_counter()
+    tts.load()
+    load_ms = int((_time.perf_counter() - started) * 1000)
+
+    chunks: list[Any] = []
+    started = _time.perf_counter()
+    first_ms = 0
+    for chunk in tts.synthesize(text):
+        if not chunks:
+            first_ms = int((_time.perf_counter() - started) * 1000)
+        chunks.append(chunk)
+    if not chunks:
+        console.print("[yellow]Nothing speakable in that text.[/yellow]")
+        raise typer.Exit(1)
+
+    synth_ms = int((_time.perf_counter() - started) * 1000)
+    audio_s = sum(c.duration_s for c in chunks)
+    console.print(
+        f"[dim]{tts.info().model}  load {load_ms} ms  first chunk {first_ms} ms  "
+        f"{synth_ms} ms for {audio_s:.1f} s audio  "
+        f"(RTF {synth_ms / 1000 / max(audio_s, 0.001):.2f})[/dim]"
+    )
+
+    if save:
+        _write_wav(Path(save), chunks)
+        console.print(f"[green]Wrote[/green] {save}")
+
+    from aura.voice.audio.playback import Speaker
+
+    speaker = Speaker(device=cfg.voice.output_device or None)
+    try:
+        for chunk in chunks:
+            speaker.play(chunk)
+        speaker.wait_until_idle(timeout=audio_s + 5)
+    finally:
+        speaker.close()
+
+
+def _write_wav(path: Path, chunks: list[Any]) -> None:
+    import wave
+
+    import numpy as np
+
+    audio = np.concatenate([c.audio for c in chunks])
+    pcm = np.clip(audio, -1.0, 1.0)
+    pcm = (pcm * 32767).astype(np.int16)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(chunks[0].sample_rate)
+        wf.writeframes(pcm.tobytes())
+
+
+@app.command()
+def listen(
+    seconds: float = typer.Option(0.0, help="Record a fixed duration instead of using VAD."),
+) -> None:
+    """Transcribe one utterance from the microphone.
+
+    Wake word not involved: this isolates mic -> VAD -> STT so a problem can be
+    attributed to one stage.
+    """
+    import numpy as np
+
+    from aura.voice.audio.capture import Microphone
+    from aura.voice.factory import build_stt
+    from aura.voice.vad import Endpointer
+
+    cfg = get_settings()
+    configure_logging(level=cfg.logging.level, fmt=cfg.logging.format)
+
+    stt = build_stt(cfg)
+    console.print("[dim]loading model...[/dim]")
+    stt.load()
+
+    endpointer = Endpointer(
+        silence_s=cfg.voice.endpoint_silence_s,
+        max_duration_s=seconds or cfg.voice.max_utterance_s,
+        start_timeout_s=cfg.voice.listen_timeout_s,
+    )
+    endpointer.vad.load()
+
+    console.print("[bold green]Speak now.[/bold green] [dim](silence ends it)[/dim]")
+    mic = Microphone(device=cfg.voice.input_device or None)
+    collector = endpointer.begin()
+    audio = None
+    with mic:
+        for frame in mic.frames(timeout=1.0):
+            segment = collector.push(frame)
+            if segment is not None:
+                audio = segment.audio
+                if not segment.has_speech:
+                    console.print("[yellow]No speech detected.[/yellow]")
+                    raise typer.Exit(1)
+                console.print(
+                    f"[dim]{len(audio) / 16000:.1f} s captured, "
+                    f"{segment.speech_s:.1f} s speech, ended by {segment.ended_by}[/dim]"
+                )
+                break
+
+    assert audio is not None
+    result = stt.transcribe(np.asarray(audio))
+    if result.is_empty:
+        console.print("[yellow]Nothing transcribed.[/yellow]")
+        raise typer.Exit(1)
+    console.print(f"\n[bold]{result.text}[/bold]")
+    console.print(f"[dim]{result.latency_ms} ms  confidence {result.confidence:.2f}[/dim]")
+
+
+@app.command()
+def voice() -> None:
+    """Run the voice loop: wake word, listen, answer aloud.
+
+    A separate process from `aura serve`, talking to it over the same
+    authenticated HTTP API any other client uses.
+    """
+    from aura.voice.core_client import CoreClient
+    from aura.voice.factory import build_stt, build_tts, build_wake
+    from aura.voice.session import VoiceSession
+    from aura.voice.types import VoiceState
+
+    cfg = get_settings()
+    configure_logging(
+        level=cfg.logging.level,
+        fmt=cfg.logging.format,
+        log_file=cfg.logging.resolved_file(),
+        redact_keys=tuple(cfg.logging.redact_keys),
+    )
+
+    core = CoreClient(cfg)
+    if not core.health():
+        console.print(
+            f"[red]AURA Core is not running[/red] at {core.base_url}.\n"
+            "Start it in another terminal:  [bold]aura serve[/bold]"
+        )
+        raise typer.Exit(1)
+
+    wake, stt, tts = build_wake(cfg), build_stt(cfg), build_tts(cfg)
+
+    console.print(f"[bold]AURA voice[/bold]  wake word: [cyan]{cfg.voice.wake.model}[/cyan]")
+    console.print(f"[dim]{stt.info().model} -> core -> {tts.info().model}[/dim]")
+    console.print("[dim]loading models...[/dim]")
+    tts.load()
+    stt.load()
+
+    icons = {
+        VoiceState.SLEEP: "[dim]zzz[/dim]",
+        VoiceState.LISTENING: "[bold green]listening[/bold green]",
+        VoiceState.THINKING: "[yellow]thinking[/yellow]",
+        VoiceState.SPEAKING: "[cyan]speaking[/cyan]",
+        VoiceState.ERROR: "[red]error[/red]",
+    }
+
+    def on_state(state: VoiceState) -> None:
+        console.print(f"  {icons.get(state, state.value)}")
+
+    def on_text(who: str, text: str) -> None:
+        if who == "user":
+            console.print(f"[bold cyan]you  >[/bold cyan] {text}")
+        elif who == "aura":
+            console.print(f"[bold magenta]aura >[/bold magenta] {text}")
+
+    session = VoiceSession(cfg, wake, stt, tts, core, on_state=on_state, on_text=on_text)
+    console.print(
+        f'\n[bold green]Ready.[/bold green] Say "{cfg.voice.wake.model.replace("_", " ")}". '
+        "[dim]Ctrl+C to stop.[/dim]\n"
+    )
+    try:
+        session.run()
+    except KeyboardInterrupt:
+        console.print("\n[dim]stopping...[/dim]")
+        session.stop()
+
+
+@app.command()
+def devices() -> None:
+    """List audio input and output devices."""
+    from aura.voice.audio.capture import list_devices
+    from aura.voice.audio.playback import list_output_devices
+
+    for title, rows in (("Input", list_devices()), ("Output", list_output_devices())):
+        console.print(f"\n[bold]{title}[/bold]")
+        for d in rows:
+            mark = "[green]*[/green]" if d["default"] else " "
+            console.print(f"  {mark} {d['index']:>3}  {d['name'][:48]:48} {d['sample_rate']} Hz")
+    console.print(
+        "\n[dim]* system default. Override with voice.input_device / "
+        "voice.output_device in config.[/dim]"
+    )
 
 
 @app.command()

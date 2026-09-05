@@ -154,6 +154,65 @@ class LoggingConfig(_Section):
         return p if p.is_absolute() else PROJECT_ROOT / p
 
 
+class WakeConfig(_Section):
+    model: str = "hey_jarvis"
+    threshold: float = Field(default=0.5, gt=0.0, le=1.0)
+    # Frames of cooldown after a detection, so one utterance of the wake word
+    # cannot fire twice.
+    cooldown_s: float = Field(default=2.0, ge=0.0)
+
+
+class STTConfig(_Section):
+    provider: str = "faster_whisper"
+    # base.en int8 on CPU: ~150 MB, ~300 ms for a 3 s utterance on 16 threads.
+    # small.en roughly triples both. GPU needs cuDNN on Windows - see
+    # docs/architecture/01-phase2-voice.md.
+    model: str = "base.en"
+    device: str = "cpu"
+    compute_type: str = "int8"
+    language: str = "en"
+    # Drop transcripts the decoder was unsure about; a half-second of keyboard
+    # noise otherwise transcribes as confident nonsense.
+    min_confidence: float = Field(default=-1.0, le=0.0)
+    beam_size: int = Field(default=1, ge=1, le=10)
+
+
+class TTSConfig(_Section):
+    provider: str = "piper"
+    voice: str = "en_US-amy-medium"
+    # >1.0 is slower speech. Piper's own default is 1.0.
+    length_scale: float = Field(default=1.0, gt=0.0, le=3.0)
+    volume: float = Field(default=1.0, gt=0.0, le=2.0)
+
+
+class VoiceConfig(_Section):
+    """Phase 2. Consumed only by the voice process, never by AURA Core."""
+
+    enabled: bool = True
+    input_device: str = ""
+    output_device: str = ""
+    # Seconds of audio kept before the wake word fires, so a request run into
+    # the trigger phrase does not lose its first word.
+    preroll_s: float = Field(default=1.5, ge=0.0, le=5.0)
+    # Silence that ends an utterance.
+    endpoint_silence_s: float = Field(default=0.6, gt=0.0, le=5.0)
+    # Hard cap on one utterance, so a stuck VAD cannot listen forever.
+    max_utterance_s: float = Field(default=20.0, gt=0.0)
+    # How long LISTENING waits for speech to start before giving up on a
+    # false wake.
+    listen_timeout_s: float = Field(default=6.0, gt=0.0)
+    # Speech during playback for this long interrupts it.
+    barge_in_s: float = Field(default=0.35, gt=0.0, le=2.0)
+    barge_in_enabled: bool = True
+    # Unload STT after this long idle. On a 16 GB machine this is not an
+    # optimisation, it is what lets AURA coexist with a browser.
+    idle_unload_s: float = Field(default=180.0, ge=0.0)
+
+    wake: WakeConfig = Field(default_factory=WakeConfig)
+    stt: STTConfig = Field(default_factory=STTConfig)
+    tts: TTSConfig = Field(default_factory=TTSConfig)
+
+
 class PersonaConfig(_Section):
     name: str = "AURA"
     system_prompt: str = "You are AURA, a local-first personal AI assistant."
@@ -204,6 +263,7 @@ class Settings(BaseSettings):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
 
     @classmethod
     def settings_customise_sources(
@@ -289,6 +349,11 @@ def get_model_catalogue() -> ModelCatalogue:
         raise ConfigError("Missing model catalogue at " + str(path))
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     return ModelCatalogue.model_validate(raw)
+
+
+def voice_models_dir() -> Path:
+    """Where wake-word and TTS voice files live."""
+    return models_dir() / "voice"
 
 
 def models_dir() -> Path:
