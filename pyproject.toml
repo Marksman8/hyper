@@ -83,6 +83,8 @@ ignore = ["S101"]  # assert is fine in tests
 "tests/**" = ["S", "B"]
 # Depends() in argument defaults is the FastAPI idiom, not a mutable default.
 "src/aura/api/*.py" = ["B008"]
+# typer.Option()/Argument() in defaults is likewise how typer declares a CLI.
+"src/aura/__main__.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.12"

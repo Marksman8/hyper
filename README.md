@@ -84,8 +84,9 @@ uv run aura serve
 Then, in a third terminal:
 
 ```powershell
-uv run aura chat            # interactive
+uv run aura chat            # interactive conversation
 uv run aura chat "hello"    # one shot
+uv run aura do "..."        # give it a task; it picks its own tools
 uv run aura status          # health, model, RAM/VRAM
 ```
 
@@ -134,6 +135,22 @@ drive your GPU on 127.0.0.1:8081.
 | `POST` | `/v1/tools/{name}` | run one tool (`confirmed: true` for level 2+) |
 
 Interactive docs at <http://127.0.0.1:8760/docs>.
+
+## Giving AURA a task
+
+```powershell
+uv run aura do "What Python version does this project require?"
+uv run aura do --approve write_file "Write a summary of the README to notes.txt"
+```
+
+Reading happens without asking. Writing or executing needs `--approve`, named
+per tool, per task — the model cannot grant that itself. When it wants a tool
+it has not been given, it says so and prints the command that would allow it.
+
+A CLI rather than a curl example on purpose: in PowerShell `curl` is an alias
+for `Invoke-WebRequest`, which takes `-Headers` as a hashtable, so every
+bash-shaped example fails there with a parameter-binding error that says
+nothing about the real problem.
 
 ## Swapping the model
 

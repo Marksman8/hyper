@@ -84,6 +84,35 @@ def chat(
     )
 
 
+@app.command(name="do")
+def do_task(
+    task: str = typer.Argument(..., help="What you want AURA to do."),
+    approve: list[str] = typer.Option(
+        [],
+        "--approve",
+        "-a",
+        help="Pre-approve a tool for this task, e.g. --approve write_file. Repeatable.",
+    ),
+    session: str = typer.Option("", "--session", "-s", help="Continue a session id."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Hide the tool trace."),
+) -> None:
+    """Give AURA a task, letting it choose its own tools.
+
+    Reading is allowed without asking. Anything that writes or executes needs
+    --approve, named per tool, per task — the model cannot grant that itself.
+    """
+    from aura.clients.agent_cli import run_agent
+
+    asyncio.run(
+        run_agent(
+            message=task,
+            approve=list(approve),
+            session_id=session or None,
+            show_trace=not quiet,
+        )
+    )
+
+
 @app.command()
 def status() -> None:
     """Print AURA Core status."""
