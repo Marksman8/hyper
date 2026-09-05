@@ -207,6 +207,29 @@ class VoiceConfig(_Section):
     # The cost is an open microphone after each reply, so it is opt-out.
     follow_up_enabled: bool = True
     follow_up_timeout_s: float = Field(default=7.0, gt=0.0, le=60.0)
+    # Interrupting with one of these cancels the answer instead of being
+    # treated as the next question. Without it, saying "stop" cuts the reply
+    # off and then asks the model what "stop" means.
+    stop_words: list[str] = Field(
+        default_factory=lambda: [
+            "stop",
+            "stop it",
+            "stop aura",
+            "stop talking",
+            "shut up",
+            "be quiet",
+            "quiet",
+            "cancel",
+            "never mind",
+            "nevermind",
+            "forget it",
+            "enough",
+            "that's enough",
+            "thats enough",
+            "okay stop",
+            "ok stop",
+        ]
+    )
     # Seconds of audio kept before the wake word fires, so a request run into
     # the trigger phrase does not lose its first word.
     preroll_s: float = Field(default=1.5, ge=0.0, le=5.0)

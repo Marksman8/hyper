@@ -157,6 +157,7 @@ class RingBuffer:
     """
 
     def __init__(self, seconds: float, sample_rate: int = SAMPLE_RATE) -> None:
+        self._sample_rate = sample_rate
         self._capacity = int(seconds * sample_rate)
         self._buf: AudioArray = np.zeros(self._capacity, dtype=np.float32)
         self._filled = 0
@@ -179,11 +180,21 @@ class RingBuffer:
         self._pos = end % self._capacity
         self._filled = min(self._capacity, self._filled + n)
 
-    def read(self) -> AudioArray:
-        """Return the buffered audio in chronological order."""
+    def read(self, seconds: float | None = None) -> AudioArray:
+        """Return buffered audio in chronological order, newest last.
+
+        `seconds` limits it to the most recent slice. Used after a barge-in to
+        recover the word the user interrupted with, without also replaying the
+        assistant's voice from earlier in the buffer.
+        """
         if self._filled < self._capacity:
-            return self._buf[: self._filled].copy()
-        return np.concatenate([self._buf[self._pos :], self._buf[: self._pos]])
+            audio = self._buf[: self._filled].copy()
+        else:
+            audio = np.concatenate([self._buf[self._pos :], self._buf[: self._pos]])
+        if seconds is None:
+            return audio
+        wanted = int(seconds * self._sample_rate)
+        return audio[-wanted:] if wanted < len(audio) else audio
 
     def clear(self) -> None:
         self._filled = 0

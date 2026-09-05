@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import numpy as np
@@ -55,6 +55,18 @@ _WAKE_PREFIX = re.compile(
     r"(?:jarvis|aura|mycroft|rhasspy|alexa)\b[\s,.!?-]*",
     re.IGNORECASE,
 )
+
+
+def is_stop_command(text: str, stop_words: Sequence[str]) -> bool:
+    """Is this utterance just "stop", rather than a new question?
+
+    Matched on the whole utterance after stripping punctuation and any wake
+    phrase, never as a substring: "stop the build" and "how do I stop a
+    container" are questions, not cancellations.
+    """
+    cleaned = re.sub(r"[^a-z0-9\s]", "", strip_wake_phrase(text).lower()).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned in {w.lower() for w in stop_words}
 
 
 def strip_wake_phrase(text: str) -> str:
@@ -121,6 +133,8 @@ class VoiceSession:
         self._last_activity = time.monotonic()
         self._speaking_since = 0.0
         self._collector: Any = None
+        # Whether the turn that just ended was cut off by the user speaking.
+        self._interrupted = False
         # Whether the turn that just ended earns a follow-up window. A turn
         # that errored or heard nothing does not: reopening the microphone
         # after a failure invites a second failure.
@@ -231,8 +245,13 @@ class VoiceSession:
             return
         self._worker = None
         # The ring buffer holds AURA's own voice from the frames captured while
-        # it was speaking. Clearing it is what keeps that audio out of the
-        # follow-up utterance.
+        # it was speaking, so it is cleared before listening again. The
+        # exception is a barge-in: the tail of the buffer is then the word the
+        # user interrupted with, and throwing it away is what used to make
+        # saying "stop" cut the reply off and then wait for a new question.
+        interrupt_preroll = None
+        if self._interrupted:
+            interrupt_preroll = self._ring.read(seconds=self._cfg.barge_in_s + 0.4)
         self._ring.clear()
         self._barge.reset()
         self._speaking_since = 0.0
@@ -240,19 +259,22 @@ class VoiceSession:
             return
 
         if self._cfg.follow_up_enabled and self._follow_up_ok:
-            self._begin_follow_up()
+            self._begin_follow_up(preroll=interrupt_preroll)
         else:
             self._set_state(VoiceState.SLEEP)
 
-    def _begin_follow_up(self) -> None:
+    def _begin_follow_up(self, preroll: AudioArray | None = None) -> None:
         """Listen again without requiring the wake word.
 
-        Entered with no pre-roll: the buffered audio is AURA's own reply, and
-        feeding that to Whisper would transcribe the assistant talking to
-        itself.
+        Normally entered with no pre-roll: the buffered audio is AURA's own
+        reply, and feeding that to Whisper would transcribe the assistant
+        talking to itself. After a barge-in the caller passes the tail of the
+        buffer instead, which is what the user just said.
         """
         self._play_cue(follow_up_cue)
-        self._collector = self._endpointer.begin(start_timeout_s=self._cfg.follow_up_timeout_s)
+        self._collector = self._endpointer.begin(
+            preroll=preroll, start_timeout_s=self._cfg.follow_up_timeout_s
+        )
         log.info("voice.follow_up_open", timeout_s=self._cfg.follow_up_timeout_s)
         self._on_text("system", "still listening")
         self._set_state(VoiceState.FOLLOW_UP)
@@ -299,6 +321,7 @@ class VoiceSession:
         if self._barge.process(frame):
             log.info("voice.barge_in", rms=round(rms, 4))
             self._on_text("system", "interrupted")
+            self._interrupted = True
             self._interrupt.set()
             self._speaker.stop()
 
@@ -321,6 +344,7 @@ class VoiceSession:
         self._interrupt.clear()
         self._barge.reset()
         self._follow_up_ok = False
+        self._interrupted = False
         self._set_state(VoiceState.THINKING)
         self._worker = threading.Thread(
             target=self._run_turn, args=(audio, speech_s), name="aura-voice-turn", daemon=True
@@ -349,6 +373,16 @@ class VoiceSession:
                     self._on_text("system", "did not catch that")
                     self._speak_now("Sorry, I didn't catch that.")
                 return
+            if is_stop_command(transcript.text, self._cfg.stop_words):
+                # A cancellation, not a question. Sending "stop" to the model
+                # would have it explain what stopping means.
+                log.info("voice.stop_command", text=transcript.text)
+                self._on_text("user", transcript.text)
+                self._on_text("system", "stopped")
+                self._speaker.stop()
+                self._follow_up_ok = True
+                return
+
             prompt = strip_wake_phrase(transcript.text)
             self._on_text("user", prompt)
 
