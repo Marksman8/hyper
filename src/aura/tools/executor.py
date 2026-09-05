@@ -52,6 +52,16 @@ class ToolExecutor:
         # can be in flight, and gives the timeout something to abandon.
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="aura-tool")
 
+    @property
+    def registry(self) -> ToolRegistry:
+        """The tools that exist. Read-only."""
+        return self._registry
+
+    @property
+    def policy(self) -> PermissionPolicy:
+        """The policy in force. Read-only: nothing may widen it at runtime."""
+        return self._policy
+
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
 

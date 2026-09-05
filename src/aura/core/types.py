@@ -8,6 +8,7 @@ that exists only because llama.cpp has it, the seam has leaked.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -27,21 +28,57 @@ class Role(StrEnum):
 
 
 @dataclass(slots=True, frozen=True)
+class ToolInvocation:
+    """A tool call the model asked for.
+
+    Deliberately *not* `aura.tools.ToolCall`. This is what a model produced —
+    a request, unvalidated and unapproved. The agent loop converts it into a
+    `tools.ToolCall` only after deciding it may run. Keeping the two types
+    apart is what stops `aura.core` depending on `aura.tools`, and stops a
+    model-produced request from being mistaken for an authorised one.
+    """
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(slots=True, frozen=True)
 class Message:
     """One message in a conversation."""
 
     role: Role
     content: str
     name: str | None = None
+    # Set on an assistant message that requested tools.
+    tool_calls: tuple[ToolInvocation, ...] = ()
+    # Set on a TOOL message, linking the result back to the request.
+    tool_call_id: str | None = None
     # Free-form provenance: which tool produced it, which monitor it was read
     # from, which memory it was retrieved from. Never sent to the model.
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_wire(self) -> dict[str, str]:
+    def to_wire(self) -> dict[str, Any]:
         """Minimal representation for a chat-completions style API."""
-        msg = {"role": self.role.value, "content": self.content}
+        msg: dict[str, Any] = {"role": self.role.value, "content": self.content}
         if self.name:
             msg["name"] = self.name
+        if self.tool_calls:
+            # Arguments go back as a JSON *string*, which is what the wire
+            # format uses and what the model produced in the first place.
+            msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.arguments),
+                    },
+                }
+                for tc in self.tool_calls
+            ]
+        if self.tool_call_id:
+            msg["tool_call_id"] = self.tool_call_id
         return msg
 
 
@@ -105,6 +142,8 @@ class ChatResult:
     usage: Usage = field(default_factory=Usage)
     finish_reason: str = "stop"
     latency_ms: int = 0
+    # Populated when the model asked for tools instead of answering.
+    tool_calls: tuple[ToolInvocation, ...] = ()
     # Chain-of-thought, when the model produces it as a separate channel.
     # Modelled as its own field rather than folded into `content` because the
     # two have different lifetimes: the answer is replayed into later prompts,

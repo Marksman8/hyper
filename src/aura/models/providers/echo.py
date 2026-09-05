@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Sequence
+from typing import Any
 
 from aura.core.types import (
     ChatChunk,
@@ -64,6 +65,7 @@ class EchoProvider(LLMProvider):
         self,
         messages: Sequence[Message],
         params: GenerationParams | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> ChatResult:
         text = self._reply(messages)
         return ChatResult(

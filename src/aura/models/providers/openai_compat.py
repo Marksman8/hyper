@@ -25,6 +25,7 @@ from aura.core.types import (
     Message,
     ProviderHealth,
     ProviderInfo,
+    ToolInvocation,
     Usage,
 )
 from aura.errors import ProviderError, ProviderTimeoutError, ProviderUnavailableError
@@ -88,6 +89,7 @@ class OpenAICompatProvider(LLMProvider):
         messages: Sequence[Message],
         params: GenerationParams | None,
         stream: bool,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         p = params or self._defaults
         payload: dict[str, Any] = {
@@ -98,6 +100,12 @@ class OpenAICompatProvider(LLMProvider):
             "max_tokens": p.max_tokens,
             "stream": stream,
         }
+        if tools:
+            payload["tools"] = list(tools)
+            # "auto" rather than forcing a call: the model must be free to
+            # answer directly when no tool is needed, or every turn costs a
+            # pointless round trip.
+            payload["tool_choice"] = "auto"
         if p.stop:
             payload["stop"] = list(p.stop)
         if p.seed is not None:
@@ -177,8 +185,9 @@ class OpenAICompatProvider(LLMProvider):
         self,
         messages: Sequence[Message],
         params: GenerationParams | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> ChatResult:
-        payload = self._payload(messages, params, stream=False)
+        payload = self._payload(messages, params, stream=False, tools=tools)
         started = time.perf_counter()
         last: Exception | None = None
 
@@ -215,6 +224,7 @@ class OpenAICompatProvider(LLMProvider):
         reasoning = message.get("reasoning_content") or ""
 
         return ChatResult(
+            tool_calls=_parse_tool_calls(message.get("tool_calls")),
             content=content,
             model=str(raw.get("model") or self._model),
             provider=self.name,
@@ -288,3 +298,37 @@ class OpenAICompatProvider(LLMProvider):
 
     async def close(self) -> None:
         await self._client.aclose()
+
+
+def _parse_tool_calls(raw: Any) -> tuple[ToolInvocation, ...]:
+    """Turn the wire form of tool calls into AURA's own type.
+
+    Arguments arrive as a JSON *string*, so they are parsed here rather than
+    anywhere downstream — a caller doing raw string matching on them is the
+    pitfall this exists to remove. A call whose arguments will not parse is
+    dropped with a warning rather than crashing the turn: the model produced
+    something malformed, which is a bad turn, not a broken assistant.
+    """
+    if not raw:
+        return ()
+    out: list[ToolInvocation] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            continue
+        fn = item.get("function") or {}
+        name = fn.get("name")
+        if not name:
+            continue
+        raw_args = fn.get("arguments") or "{}"
+        try:
+            args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            log.warning("provider.bad_tool_arguments", tool=name, raw=str(raw_args)[:200])
+            continue
+        if not isinstance(args, dict):
+            log.warning("provider.tool_arguments_not_object", tool=name)
+            continue
+        out.append(
+            ToolInvocation(id=str(item.get("id") or f"call_{i}"), name=str(name), arguments=args)
+        )
+    return tuple(out)

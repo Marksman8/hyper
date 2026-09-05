@@ -59,8 +59,14 @@ class LLMProvider(ABC):
         self,
         messages: Sequence[Message],
         params: GenerationParams | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> ChatResult:
         """Generate a complete response.
+
+        `tools` is a list of definitions in the wire format the backend
+        expects. Passing schemas rather than objects is what keeps this
+        interface independent of `aura.tools` — a provider needs to know what
+        a tool looks like on the wire, not what it does.
 
         Raises:
             ProviderUnavailableError: backend unreachable.

@@ -21,8 +21,10 @@ import asyncio
 import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from aura.config import Settings
+from aura.core.agent import AgentLoop, AgentOutcome
 from aura.core.types import (
     ChatChunk,
     Fact,
@@ -55,6 +57,9 @@ class TurnResult:
     usage: Usage
     finish_reason: str
     latency_ms: int
+    # Present only for a tool-using turn. Carries the step trace so a caller
+    # can show what happened rather than only the final sentence.
+    agent: Any = None
 
 
 class Orchestrator:
@@ -64,11 +69,15 @@ class Orchestrator:
         provider: LLMProvider,
         store: MemoryStore,
         audit: AuditLog,
+        tools: Any = None,
     ) -> None:
         self._settings = settings
         self._provider = provider
         self._store = store
         self._audit = audit
+        # An `aura.core.agent.ToolRunner`, or None when tools are off. Typed
+        # loosely on purpose: the orchestrator does not import aura.tools.
+        self._tools = tools
         # Runtime-flippable, distinct from the config default, so the emergency
         # stop can be engaged without restarting AURA.
         self._estop = settings.app.emergency_stop
@@ -97,7 +106,9 @@ class Orchestrator:
 
     # -- prompt assembly -----------------------------------------------------
 
-    async def _system_messages(self, *, spoken: bool = False) -> list[Message]:
+    async def _system_messages(
+        self, *, spoken: bool = False, with_tools: bool = False
+    ) -> list[Message]:
         """System prompt plus whatever AURA durably knows about the user.
 
         Facts are injected as text rather than fine-tuned in (spec section 15:
@@ -106,6 +117,8 @@ class Orchestrator:
         leaks into every future conversation.
         """
         parts = [self._settings.persona.system_prompt.strip()]
+        if with_tools:
+            parts.append(self._settings.persona.agent_system_prompt.strip())
         if spoken:
             parts.append(self._settings.persona.voice_system_prompt.strip())
 
@@ -122,7 +135,9 @@ class Orchestrator:
 
         return [Message(role=Role.SYSTEM, content="\n\n".join(parts))]
 
-    async def _assemble(self, session_id: str, *, spoken: bool = False) -> list[Message]:
+    async def _assemble(
+        self, session_id: str, *, spoken: bool = False, with_tools: bool = False
+    ) -> list[Message]:
         """Build the prompt from the system message plus stored history.
 
         The current user message is NOT appended here: _open_turn has already
@@ -132,14 +147,19 @@ class Orchestrator:
         history = await self._store.recent_turns(session_id, self._settings.memory.history_turns)
         history = build_history(history, self._settings.memory.history_char_budget)
 
-        messages = await self._system_messages(spoken=spoken)
+        messages = await self._system_messages(spoken=spoken, with_tools=with_tools)
         messages += [t.to_message() for t in history]
         return messages
 
     # -- turn execution ------------------------------------------------------
 
     async def _open_turn(
-        self, session_id: str | None, user_text: str, *, spoken: bool = False
+        self,
+        session_id: str | None,
+        user_text: str,
+        *,
+        spoken: bool = False,
+        with_tools: bool = False,
     ) -> tuple[Session, list[Message]]:
         """Shared prologue for streaming and non-streaming turns."""
         self._guard()
@@ -147,7 +167,7 @@ class Orchestrator:
         bind_session_id(session.id)
 
         await self._store.add_turn(Turn(session_id=session.id, role=Role.USER, content=user_text))
-        messages = await self._assemble(session.id, spoken=spoken)
+        messages = await self._assemble(session.id, spoken=spoken, with_tools=with_tools)
         return session, messages
 
     async def chat(
@@ -214,6 +234,115 @@ class Orchestrator:
             usage=result.usage,
             finish_reason=result.finish_reason,
             latency_ms=latency_ms,
+        )
+
+    async def act(
+        self,
+        user_text: str,
+        *,
+        session_id: str | None = None,
+        params: GenerationParams | None = None,
+        approve: Sequence[str] = (),
+        spoken: bool = False,
+    ) -> TurnResult:
+        """Run a turn that may use tools (spec section 7).
+
+        `approve` names tools a human has authorised for this task, ahead of
+        time. Nothing the model produces can add to that list — an approval is
+        something a person grants, and the loop has no way to grant one to
+        itself.
+
+        Falls back to a plain turn when tools are unavailable, so a caller does
+        not have to check first.
+        """
+        if self._tools is None or not self._settings.agent.enabled:
+            return await self.chat(user_text, session_id=session_id, params=params, spoken=spoken)
+
+        session, messages = await self._open_turn(
+            session_id, user_text, spoken=spoken, with_tools=True
+        )
+        cfg = self._settings.agent
+        loop = AgentLoop(
+            provider=self._provider,
+            tools=self._tools,
+            max_steps=cfg.max_steps,
+            max_seconds=cfg.max_seconds,
+            approved_tools=approve,
+        )
+        # Lower temperature than conversation: picking a tool and its arguments
+        # is a decision, and creativity there produces malformed calls.
+        tool_params = (params or self._default_params()).merged(temperature=cfg.tool_temperature)
+
+        try:
+            outcome: AgentOutcome = await loop.run(
+                messages, tool_params, should_stop=lambda: self._estop
+            )
+        except Exception as exc:
+            await self._record_failure(session.id, exc)
+            raise
+
+        await self._store.add_turn(
+            Turn(
+                session_id=session.id,
+                role=Role.ASSISTANT,
+                content=outcome.content,
+                model=outcome.model,
+                provider=outcome.provider,
+                prompt_tokens=outcome.usage.prompt_tokens,
+                completion_tokens=outcome.usage.completion_tokens,
+                latency_ms=outcome.latency_ms,
+                finish_reason=outcome.stop_reason,
+                # The trace is the answer to "why did AURA do this?", so it is
+                # stored with the turn rather than only logged.
+                metadata={
+                    "agent": True,
+                    "tool_calls": outcome.tool_calls_made,
+                    "steps": [
+                        {"kind": st.kind, "tools": [c["name"] for c in st.tool_calls]}
+                        for st in outcome.steps
+                    ],
+                    "stopped_early": outcome.stopped_early,
+                    "pending_confirmations": outcome.pending_confirmations,
+                },
+            )
+        )
+        await self._audit.record(
+            actor="user",
+            action="agent.turn",
+            level=PermissionLevel.OBSERVE,
+            session_id=session.id,
+            target=outcome.model,
+            detail={
+                "tool_calls": outcome.tool_calls_made,
+                "steps": len(outcome.steps),
+                "stop_reason": outcome.stop_reason,
+                "approved": list(approve),
+                "latency_ms": outcome.latency_ms,
+            },
+        )
+        log.info(
+            "agent.turn_complete",
+            tool_calls=outcome.tool_calls_made,
+            steps=len(outcome.steps),
+            stop_reason=outcome.stop_reason,
+            latency_ms=outcome.latency_ms,
+        )
+
+        return TurnResult(
+            session_id=session.id,
+            content=outcome.content,
+            model=outcome.model,
+            provider=outcome.provider,
+            usage=outcome.usage,
+            finish_reason=outcome.stop_reason,
+            latency_ms=outcome.latency_ms,
+            agent=outcome,
+        )
+
+    def _default_params(self) -> GenerationParams:
+        cfg = self._settings.llm
+        return GenerationParams(
+            temperature=cfg.temperature, top_p=cfg.top_p, max_tokens=cfg.max_tokens
         )
 
     async def stream(

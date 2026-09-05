@@ -323,6 +323,20 @@ class ToolsConfig(_Section):
         return tuple(out)
 
 
+class AgentConfig(_Section):
+    """Phase 4. The budget the loop runs under."""
+
+    enabled: bool = True
+    # A loop that decides for itself when to stop is a loop that sometimes
+    # does not. Eight steps is enough for read-inspect-answer chains and short
+    # of enough for a model to wander.
+    max_steps: int = Field(default=8, ge=1, le=50)
+    max_seconds: float = Field(default=180.0, gt=0.0, le=3600.0)
+    # Lower than conversational temperature: choosing a tool and its arguments
+    # is a decision, and creativity there produces malformed calls.
+    tool_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+
+
 class PersonaConfig(_Section):
     name: str = "AURA"
     system_prompt: str = "You are AURA, a local-first personal AI assistant."
@@ -331,6 +345,21 @@ class PersonaConfig(_Section):
     # bullet lists, which a synthesiser reads out as "hash hash" and "star
     # star". Stripping the markup afterwards fixes the symbols but not the
     # shape - a bulleted spec sheet read aloud is still a bad answer.
+    # Prepended when a turn may use tools. Kept separate from the base prompt
+    # so a tool-free conversation is not paying for instructions about tools
+    # it cannot use.
+    agent_system_prompt: str = (
+        "You have tools available. Use them when they would answer the "
+        "question better than guessing would.\n"
+        "- Look before you conclude. If asked about a file or a directory, "
+        "read it rather than assuming what it contains.\n"
+        "- One step at a time. Call a tool, read the result, then decide what "
+        "to do next.\n"
+        "- If a tool is REFUSED or DENIED, do not retry it. Say what you "
+        "wanted to do and why, and let the user decide.\n"
+        "- When you have enough to answer, answer. Do not keep calling tools "
+        "to be thorough."
+    )
     voice_system_prompt: str = (
         "This reply will be spoken aloud, so write it to be heard, not read.\n"
         "- Plain sentences only. No markdown, headings, bullet points, "
@@ -390,6 +419,7 @@ class Settings(BaseSettings):
     persona: PersonaConfig = Field(default_factory=PersonaConfig)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
 
     @classmethod
     def settings_customise_sources(

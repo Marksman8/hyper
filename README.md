@@ -9,7 +9,11 @@ model underneath is a configuration value, not a code dependency.
 
 > **Current scope.** v0.1: conversation, persistent memory, local API, CLI.
 > Phase 2 (voice): wake word, speech in, speech out, barge-in.
-> No vision, tools, or autonomous action yet — see [the roadmap](docs/ROADMAP.md).
+> Phase 3 (tools): filesystem and Python behind permission levels 0–4.
+> Phase 4 (agent): the model picks its own tools and loops until it can answer,
+> under a step budget it does not control.
+> No vision yet — see [the roadmap](docs/ROADMAP.md) and
+> [known issues](docs/KNOWN-ISSUES.md).
 
 ---
 

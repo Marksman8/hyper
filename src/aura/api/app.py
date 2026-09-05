@@ -19,6 +19,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from aura import __version__
 from aura.api.schemas import (
+    AgentRequest,
+    AgentResponse,
+    AgentStepOut,
     ChatRequest,
     ChatResponse,
     EStopRequest,
@@ -99,16 +102,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         token = load_or_create_token(cfg.security.resolved_token_file(), cfg.security.api_token)
 
         tools = None
+        runner = None
         if cfg.tools.enabled:
-            from aura.tools.factory import build_executor
+            from aura.tools.factory import build_context, build_executor
+            from aura.tools.runner import ExecutorToolRunner
 
             tools = build_executor(cfg, audit)
+            runner = ExecutorToolRunner(tools, build_context(cfg))
 
         app.state.aura = AppState(
             settings=cfg,
             store=store,
             audit=audit,
-            orchestrator=Orchestrator(cfg, provider, store, audit),
+            orchestrator=Orchestrator(cfg, provider, store, audit, tools=runner),
             token=token,
             started_at=time.time(),
             tools=tools,
@@ -440,6 +446,55 @@ def _install_routes(app: FastAPI) -> None:
         if not deleted:
             raise NotFoundError("Nothing remembered under key " + repr(key))
         return {"deleted": True}
+
+    # -- agent (spec section 7) ------------------------------------------------
+
+    @app.post("/v1/agent", response_model=AgentResponse, tags=["agent"])
+    async def agent(body: AgentRequest, state: AppState = Depends(get_state)) -> AgentResponse:
+        """Run a turn that may use tools.
+
+        Falls back to a plain conversational turn when tools are disabled, so a
+        client does not have to check first.
+        """
+        params = GenerationParams(
+            temperature=state.settings.llm.temperature,
+            top_p=state.settings.llm.top_p,
+            max_tokens=state.settings.llm.max_tokens,
+        ).merged(temperature=body.temperature)
+
+        result = await state.orchestrator.act(
+            body.message,
+            session_id=body.session_id,
+            params=params,
+            approve=body.approve,
+        )
+        outcome = result.agent
+        return AgentResponse(
+            session_id=result.session_id,
+            content=result.content,
+            model=result.model,
+            provider=result.provider,
+            usage=UsageOut(
+                prompt_tokens=result.usage.prompt_tokens,
+                completion_tokens=result.usage.completion_tokens,
+                total_tokens=result.usage.total_tokens,
+            ),
+            latency_ms=result.latency_ms,
+            tool_calls_made=getattr(outcome, "tool_calls_made", 0),
+            steps=[
+                AgentStepOut(
+                    index=st.index,
+                    kind=st.kind,
+                    content=st.content,
+                    tools=st.tool_calls,
+                    latency_ms=st.latency_ms,
+                )
+                for st in getattr(outcome, "steps", [])
+            ],
+            stopped_early=getattr(outcome, "stopped_early", False),
+            stop_reason=getattr(outcome, "stop_reason", result.finish_reason),
+            pending_confirmations=getattr(outcome, "pending_confirmations", []),
+        )
 
     # -- tools (spec section 8) ----------------------------------------------
 

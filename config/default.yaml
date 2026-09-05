@@ -103,3 +103,14 @@ tools:
   max_confirmable_level: 3
   python_enabled: true
   default_timeout_s: 30.0
+
+agent:
+  # Phase 4. When tools are enabled and a turn asks for them, the model drives
+  # a loop: call a tool, read the result, decide what to do next.
+  enabled: true
+  # A hard ceiling on iterations. The model is told when it runs out, so its
+  # final answer can say what is unfinished instead of inventing a conclusion.
+  max_steps: 8
+  max_seconds: 180.0
+  # Choosing a tool is a decision, not a creative act.
+  tool_temperature: 0.2

@@ -27,6 +27,43 @@ class ChatRequest(BaseModel):
     spoken: bool = False
 
 
+class AgentRequest(BaseModel):
+    """Ask AURA to do something, using tools if it needs them."""
+
+    message: str = Field(min_length=1, max_length=100_000)
+    session_id: str | None = None
+    # Tools a human authorises for this task, named up front. The model cannot
+    # add to this list; anything else it asks for comes back as a refusal it
+    # has to explain rather than route around.
+    approve: list[str] = Field(default_factory=list)
+    max_steps: int | None = Field(default=None, ge=1, le=50)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+
+
+class AgentStepOut(BaseModel):
+    index: int
+    kind: str
+    content: str = ""
+    tools: list[dict[str, Any]] = Field(default_factory=list)
+    latency_ms: int = 0
+
+
+class AgentResponse(BaseModel):
+    session_id: str
+    content: str
+    model: str
+    provider: str
+    usage: UsageOut
+    latency_ms: int
+    tool_calls_made: int = 0
+    steps: list[AgentStepOut] = Field(default_factory=list)
+    # True when the loop ran out of budget rather than finishing, so a caller
+    # can tell "done" from "gave up".
+    stopped_early: bool = False
+    stop_reason: str = "complete"
+    pending_confirmations: list[str] = Field(default_factory=list)
+
+
 class UsageOut(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
