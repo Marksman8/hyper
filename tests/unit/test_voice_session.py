@@ -148,6 +148,8 @@ def make_settings(**voice_overrides: Any) -> Settings:
         "preroll_s": 0.2,
         "barge_in_s": 0.15,
         "barge_in_grace_s": 0.15,
+        "follow_up_enabled": True,
+        "follow_up_timeout_s": 0.5,
         "barge_in_min_rms": 0.02,
         "idle_unload_s": 0.0,
         "wake": WakeConfig(model="null"),
@@ -356,7 +358,11 @@ def test_barge_in_stops_playback_mid_reply(rig: Any) -> None:
         assert wait_for(lambda: speaker.stop_calls > 0, timeout=5.0), (
             "playback was not stopped by barge-in"
         )
-        assert wait_for(lambda: session.state is VoiceState.SLEEP, timeout=6.0)
+        # Interrupting means the user has something to say, so AURA reopens the
+        # microphone rather than making them start again with the wake word.
+        # (What happens next depends on whether they keep talking, which
+        # test_follow_up_expires_into_sleep_when_nothing_is_said covers.)
+        assert wait_for(lambda: session.state is VoiceState.FOLLOW_UP, timeout=6.0)
 
         # And it stopped early rather than running to the end of the reply.
         assert len(rig["tts"].spoken) < 39, (
@@ -419,3 +425,94 @@ def test_loud_speech_after_grace_does_trigger_barge_in(rig: Any) -> None:
             fired = True
             break
     assert fired, "loud sustained speech after the grace period should interrupt"
+
+
+# -- follow-up window --------------------------------------------------------
+# Without this, every question starts with the wake word, which makes AURA feel
+# like a vending machine instead of something you are talking to.
+
+
+def _drive_one_turn(rig: Any, said: str) -> None:
+    """Wake, speak, and let one full turn complete."""
+    rig["stt"].push(said)
+    rig["wake"].trigger()
+    rig["mic"].feed(silent_frame())
+    assert wait_for(lambda: rig["session"].state is VoiceState.LISTENING)
+    rig["mic"].feed(speech_frame(), times=10)
+    rig["mic"].feed(silent_frame(), times=8)
+
+
+def test_after_answering_it_keeps_listening_without_a_wake_word(rig: Any) -> None:
+    session, mic, stt, core = rig["session"], rig["mic"], rig["stt"], rig["core"]
+    thread = run_session(session)
+    try:
+        _drive_one_turn(rig, "first question")
+        assert wait_for(lambda: session.state is VoiceState.FOLLOW_UP, timeout=8.0), (
+            "did not open a follow-up window after answering"
+        )
+
+        # A second question, with no wake word this time.
+        stt.push("second question")
+        mic.feed(speech_frame(), times=10)
+        mic.feed(silent_frame(), times=8)
+
+        assert wait_for(lambda: len(core.prompts) == 2, timeout=8.0), (
+            f"follow-up never reached Core; prompts={core.prompts}"
+        )
+        assert core.prompts == ["first question", "second question"]
+        # And it stays one conversation, so context carries over.
+        assert core.session_id == "test-session"
+    finally:
+        session.stop()
+        thread.join(timeout=3)
+
+
+def test_follow_up_expires_into_sleep_when_nothing_is_said(rig: Any) -> None:
+    session, mic = rig["session"], rig["mic"]
+    thread = run_session(session)
+    try:
+        _drive_one_turn(rig, "only question")
+        assert wait_for(lambda: session.state is VoiceState.FOLLOW_UP, timeout=8.0)
+
+        mic.feed(silent_frame(), times=25)  # past follow_up_timeout_s
+        assert wait_for(lambda: session.state is VoiceState.SLEEP, timeout=8.0), (
+            "follow-up window never closed"
+        )
+    finally:
+        session.stop()
+        thread.join(timeout=3)
+
+
+def test_no_follow_up_when_nothing_was_heard(rig: Any) -> None:
+    """A failed turn must not reopen the microphone.
+
+    Whatever caused the failure -- noise, a false wake, a bad transcript -- is
+    likely still happening, so listening again just invites a second failure.
+    """
+    session, mic, wake = rig["session"], rig["mic"], rig["wake"]
+    thread = run_session(session)
+    try:
+        # NullSTT with an empty queue returns an empty transcript.
+        wake.trigger()
+        mic.feed(silent_frame())
+        assert wait_for(lambda: session.state is VoiceState.LISTENING)
+        mic.feed(speech_frame(), times=10)
+        mic.feed(silent_frame(), times=8)
+
+        assert wait_for(lambda: session.state is VoiceState.SLEEP, timeout=8.0)
+        assert session.state is not VoiceState.FOLLOW_UP
+    finally:
+        session.stop()
+        thread.join(timeout=3)
+
+
+def test_follow_up_can_be_disabled(rig: Any) -> None:
+    session = rig["session"]
+    session._cfg = session._cfg.model_copy(update={"follow_up_enabled": False})
+    thread = run_session(session)
+    try:
+        _drive_one_turn(rig, "one and done")
+        assert wait_for(lambda: session.state is VoiceState.SLEEP, timeout=8.0)
+    finally:
+        session.stop()
+        thread.join(timeout=3)

@@ -28,7 +28,7 @@ import numpy as np
 from aura.config import Settings
 from aura.logging import get_logger, new_request_id
 from aura.voice.audio.capture import Microphone, RingBuffer
-from aura.voice.audio.cues import dismiss_cue, wake_cue
+from aura.voice.audio.cues import dismiss_cue, follow_up_cue, wake_cue
 from aura.voice.audio.playback import Speaker
 from aura.voice.core_client import CoreClient, CoreUnavailableError
 from aura.voice.stt.base import STTProvider
@@ -119,6 +119,11 @@ class VoiceSession:
         self._worker: threading.Thread | None = None
         self._last_activity = time.monotonic()
         self._speaking_since = 0.0
+        self._collector: Any = None
+        # Whether the turn that just ended earns a follow-up window. A turn
+        # that errored or heard nothing does not: reopening the microphone
+        # after a failure invites a second failure.
+        self._follow_up_ok = False
         self.timings = TurnTimings()
 
     # -- state ---------------------------------------------------------------
@@ -163,7 +168,6 @@ class VoiceSession:
         self._mic.start()
         self._set_state(VoiceState.SLEEP)
 
-        collector = None
         try:
             while not self._stop.is_set():
                 # Reap a finished turn before touching the microphone. Doing
@@ -184,16 +188,22 @@ class VoiceSession:
                         # is the user's only confirmation that AURA woke up.
                         self._play_cue(wake_cue)
                         self._on_text("system", "listening")
-                        collector = self._endpointer.begin(preroll=self._ring.read())
+                        self._collector = self._endpointer.begin(preroll=self._ring.read())
                         self._set_state(VoiceState.LISTENING)
 
-                elif self._state is VoiceState.LISTENING:
-                    assert collector is not None
-                    segment = collector.push(frame)
+                elif self._state in (VoiceState.LISTENING, VoiceState.FOLLOW_UP):
+                    assert self._collector is not None
+                    segment = self._collector.push(frame)
                     if segment is not None:
-                        collector = None
+                        was_follow_up = self._state is VoiceState.FOLLOW_UP
+                        self._collector = None
                         if not segment.has_speech:
-                            log.info("voice.false_wake", ended_by=segment.ended_by)
+                            # In a follow-up window this is the normal ending:
+                            # the user had nothing more to ask.
+                            log.info(
+                                "voice.follow_up_expired" if was_follow_up else "voice.false_wake",
+                                ended_by=segment.ended_by,
+                            )
                             self._play_cue(dismiss_cue)
                             self._ring.clear()
                             self._set_state(VoiceState.SLEEP)
@@ -215,15 +225,36 @@ class VoiceSession:
             log.warning("voice.cue_failed", error=str(exc))
 
     def _reap_finished_turn(self) -> None:
-        """Return to SLEEP once the reply worker has exited."""
+        """Once the reply worker exits, either listen again or go to sleep."""
         if self._worker is None or self._worker.is_alive():
             return
         self._worker = None
+        # The ring buffer holds AURA's own voice from the frames captured while
+        # it was speaking. Clearing it is what keeps that audio out of the
+        # follow-up utterance.
         self._ring.clear()
         self._barge.reset()
         self._speaking_since = 0.0
-        if self._state in (VoiceState.THINKING, VoiceState.SPEAKING):
+        if self._state not in (VoiceState.THINKING, VoiceState.SPEAKING):
+            return
+
+        if self._cfg.follow_up_enabled and self._follow_up_ok:
+            self._begin_follow_up()
+        else:
             self._set_state(VoiceState.SLEEP)
+
+    def _begin_follow_up(self) -> None:
+        """Listen again without requiring the wake word.
+
+        Entered with no pre-roll: the buffered audio is AURA's own reply, and
+        feeding that to Whisper would transcribe the assistant talking to
+        itself.
+        """
+        self._play_cue(follow_up_cue)
+        self._collector = self._endpointer.begin(start_timeout_s=self._cfg.follow_up_timeout_s)
+        log.info("voice.follow_up_open", timeout_s=self._cfg.follow_up_timeout_s)
+        self._on_text("system", "still listening")
+        self._set_state(VoiceState.FOLLOW_UP)
 
     def _check_barge_in(self, frame: AudioArray) -> None:
         """Interrupt playback when the *user* talks over AURA.
@@ -288,6 +319,7 @@ class VoiceSession:
     def _start_turn(self, audio: AudioArray, speech_s: float) -> None:
         self._interrupt.clear()
         self._barge.reset()
+        self._follow_up_ok = False
         self._set_state(VoiceState.THINKING)
         self._worker = threading.Thread(
             target=self._run_turn, args=(audio, speech_s), name="aura-voice-turn", daemon=True
@@ -326,6 +358,10 @@ class VoiceSession:
             for delta in self._core.stream_reply(prompt):
                 if self._interrupt.is_set():
                     log.info("voice.turn_interrupted")
+                    # The user talked over the answer, so they clearly have
+                    # something to say. Reopen the microphone rather than
+                    # making them start again with the wake word.
+                    self._follow_up_ok = True
                     return
                 if not first_token_at:
                     first_token_at = time.perf_counter()
@@ -345,6 +381,9 @@ class VoiceSession:
                     spoke_anything = True
 
             if spoke_anything:
+                # An answer was actually delivered, so a follow-up question is
+                # a natural next move.
+                self._follow_up_ok = True
                 # Wait for playback to drain, but keep checking for an
                 # interrupt so a barge-in during the tail still cuts through.
                 while self._speaker.is_playing and not self._interrupt.is_set():

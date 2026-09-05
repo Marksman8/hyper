@@ -201,6 +201,12 @@ class VoiceConfig(_Section):
     # first spoken word is "is this thing even on?".
     wake_cue: bool = True
     cue_volume: float = Field(default=0.18, gt=0.0, le=1.0)
+    # After answering, keep listening briefly so a follow-up question needs no
+    # wake word. Without this every question begins with "hey jarvis", which
+    # makes AURA feel like a vending machine rather than a conversation.
+    # The cost is an open microphone after each reply, so it is opt-out.
+    follow_up_enabled: bool = True
+    follow_up_timeout_s: float = Field(default=7.0, gt=0.0, le=60.0)
     # Seconds of audio kept before the wake word fires, so a request run into
     # the trigger phrase does not lose its first word.
     preroll_s: float = Field(default=1.5, ge=0.0, le=5.0)

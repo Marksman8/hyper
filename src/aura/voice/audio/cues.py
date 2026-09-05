@@ -61,3 +61,16 @@ def dismiss_cue(volume: float = 0.14, sample_rate: int = CUE_SAMPLE_RATE) -> Spe
         sample_rate=sample_rate,
         text="[dismiss]",
     )
+
+
+def follow_up_cue(volume: float = 0.12, sample_rate: int = CUE_SAMPLE_RATE) -> SpeechChunk:
+    """A single soft tone: AURA finished answering and is still listening.
+
+    Quieter and shorter than the wake cue. It fires after every reply, so it
+    has to be easy to ignore -- it means "your turn", not "pay attention".
+    """
+    return SpeechChunk(
+        audio=_tone((760.0,), 0.09, sample_rate, volume),
+        sample_rate=sample_rate,
+        text="[follow_up]",
+    )

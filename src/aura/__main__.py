@@ -259,6 +259,10 @@ def voice() -> None:
     icons = {
         VoiceState.SLEEP: "[dim]zzz[/dim]",
         VoiceState.LISTENING: "[bold green]listening[/bold green]",
+        VoiceState.FOLLOW_UP: (
+            "[bold green]still listening[/bold green] "
+            "[dim](no wake word needed)[/dim]"
+        ),
         VoiceState.THINKING: "[yellow]thinking[/yellow]",
         VoiceState.SPEAKING: "[cyan]speaking[/cyan]",
         VoiceState.ERROR: "[red]error[/red]",
@@ -274,9 +278,14 @@ def voice() -> None:
             console.print(f"[bold magenta]aura >[/bold magenta] {text}")
 
     session = VoiceSession(cfg, wake, stt, tts, core, on_state=on_state, on_text=on_text)
+    follow = (
+        f"Follow-ups stay open for {cfg.voice.follow_up_timeout_s:.0f}s after each answer."
+        if cfg.voice.follow_up_enabled
+        else "Follow-up mode is off; every question needs the wake word."
+    )
     console.print(
         f'\n[bold green]Ready.[/bold green] Say "{cfg.voice.wake.model.replace("_", " ")}". '
-        "[dim]Ctrl+C to stop.[/dim]\n"
+        f"[dim]{follow} Ctrl+C to stop.[/dim]\n"
     )
     try:
         session.run()

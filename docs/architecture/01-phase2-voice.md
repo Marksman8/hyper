@@ -82,16 +82,29 @@ v0.1 suite run against `EchoProvider`.
 
 ```
                   wake word
-     SLEEP  ---------------------->  LISTENING
-       ^                                 |
-       |                                 | VAD endpoint (silence)
-       |                                 v
-       |                             THINKING   (STT + LLM)
-       |                                 |
-       |                                 | first sentence ready
-       |                                 v
-       +------- done / barge-in ----  SPEAKING
+     SLEEP  ---------------------->  LISTENING <--------+
+       ^                                 |              |
+       |                                 | VAD endpoint |
+       |                                 v              |
+       |                             THINKING           |
+       |                                 |              |
+       |                                 v              |
+       |                             SPEAKING           |
+       |                                 |              |
+       |                                 v              |
+       +---- nothing said ---------  FOLLOW_UP ---------+
+                                                 speech
 ```
+
+**FOLLOW_UP** is what makes this a conversation rather than a vending machine.
+After an answer, the microphone stays open for a few seconds so the next
+question needs no wake word; saying nothing closes it. Barge-in also lands
+here, because talking over an answer is unambiguous evidence that the user has
+something to say.
+
+Entered with no pre-roll, deliberately: the ring buffer at that moment holds
+AURA'''s own reply, and feeding that to Whisper transcribes the assistant
+talking to itself.
 
 - **LISTENING** has a hard timeout, so a false wake never leaves the mic open.
 - **Barge-in**: VAD running during SPEAKING. Speech above threshold for ~200 ms

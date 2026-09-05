@@ -42,6 +42,10 @@ class VoiceState(StrEnum):
 
     SLEEP = "sleep"
     LISTENING = "listening"
+    # Listening again straight after an answer, with no wake word required.
+    # A separate state from LISTENING because it is entered differently, times
+    # out sooner, and expiring is the normal outcome rather than a false wake.
+    FOLLOW_UP = "follow_up"
     THINKING = "thinking"
     SPEAKING = "speaking"
     ERROR = "error"

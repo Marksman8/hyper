@@ -167,14 +167,23 @@ class Endpointer:
     def vad(self) -> StreamingVAD:
         return self._vad
 
-    def begin(self, preroll: AudioArray | None = None) -> _Collector:
-        """Start collecting. `preroll` is audio from before the wake word."""
+    def begin(
+        self,
+        preroll: AudioArray | None = None,
+        start_timeout_s: float | None = None,
+    ) -> _Collector:
+        """Start collecting.
+
+        `preroll` is audio from before the wake word. `start_timeout_s`
+        overrides how long to wait for speech to begin, which a follow-up
+        window sets differently from a wake-word utterance.
+        """
         self._vad.reset()
         return _Collector(
             vad=self._vad,
             silence_s=self._silence_s,
             max_s=self._max_s,
-            start_timeout_s=self._start_timeout_s,
+            start_timeout_s=(self._start_timeout_s if start_timeout_s is None else start_timeout_s),
             preroll=preroll,
         )
 
