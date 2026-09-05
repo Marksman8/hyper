@@ -212,22 +212,37 @@ class VoiceConfig(_Section):
     # off and then asks the model what "stop" means.
     stop_words: list[str] = Field(
         default_factory=lambda: [
+            # Whisper punctuates and capitalises freely, and people phrase this
+            # a dozen ways under mild irritation. Matching is on the whole
+            # utterance, so a long list costs nothing and a short one silently
+            # sends "stop please" to the model as a question.
             "stop",
             "stop it",
             "stop aura",
             "stop talking",
+            "stop please",
+            "please stop",
+            "stopped",
+            "no stop",
+            "stop stop",
             "shut up",
             "be quiet",
             "quiet",
             "cancel",
+            "cancel that",
+            "cancel it",
             "never mind",
             "nevermind",
             "forget it",
+            "forget that",
             "enough",
             "that's enough",
             "thats enough",
             "okay stop",
             "ok stop",
+            "wait",
+            "wait wait",
+            "hold on",
         ]
     )
     # Seconds of audio kept before the wake word fires, so a request run into
@@ -250,15 +265,22 @@ class VoiceConfig(_Section):
     #   min_rms: require real loudness, since speaker bleed is much quieter
     #            than a person addressing the machine
     barge_in_grace_s: float = Field(default=1.0, ge=0.0, le=10.0)
-    # Measured on a laptop with speakers: AURA's own voice reaches the mic
-    # array at RMS 0.024 to 0.040. An earlier default of 0.02 sat *below* that
-    # floor, so every barge-in was the assistant hearing itself -- it then
-    # transcribed its own reply, asked the model about it, and answered again,
-    # in a loop that never terminated.
+    # How much louder than AURA's own echo the user has to be.
     #
-    # Speaker coupling varies enormously between machines, so this default is
-    # a starting point rather than a truth. `aura calibrate` measures it.
-    barge_in_min_rms: float = Field(default=0.10, ge=0.0, le=1.0)
+    # A fixed absolute threshold cannot work here: the right value depends on
+    # speaker volume, microphone gain and where the user is sitting. Set too
+    # low it made AURA interrupt itself in a loop; set too high it ignored a
+    # real person saying "stop" for eighteen seconds. Both were observed.
+    #
+    # So the echo is measured instead of assumed. During the grace period after
+    # playback starts the user is almost certainly not talking yet, so the
+    # microphone level in that window *is* the echo floor for this utterance,
+    # under this volume, in this room. Interrupting then means exceeding it by
+    # this factor.
+    barge_in_echo_factor: float = Field(default=2.0, ge=1.0, le=20.0)
+    # Absolute floor, for headphones and quiet rooms where the measured echo is
+    # near zero and any multiple of it would trigger on a cough.
+    barge_in_min_rms: float = Field(default=0.015, ge=0.0, le=1.0)
     # A feedback loop must be impossible by construction, not merely unlikely.
     # This many barge-ins in a row with no wake word between them means AURA is
     # talking to itself; barge-in is then disabled for the session.

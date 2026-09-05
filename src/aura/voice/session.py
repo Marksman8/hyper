@@ -69,6 +69,23 @@ def is_stop_command(text: str, stop_words: Sequence[str]) -> bool:
     return cleaned in {w.lower() for w in stop_words}
 
 
+def _looks_like_a_stop_attempt(text: str, stop_words: Sequence[str]) -> bool:
+    """A short utterance that shares a word with the stop list but did not match.
+
+    Purely diagnostic. It changes no behaviour -- guessing at a cancellation
+    would be worse than missing one, since acting on a half-heard word means
+    cutting off an answer the user wanted.
+    """
+    cleaned = re.sub(r"[^a-z0-9\s]", "", strip_wake_phrase(text).lower()).strip()
+    if not cleaned or is_stop_command(text, stop_words):
+        return False
+    words = set(cleaned.split())
+    if len(words) > 3:
+        return False
+    vocabulary = {w for phrase in stop_words for w in phrase.lower().split()}
+    return bool(words & vocabulary)
+
+
 def strip_wake_phrase(text: str) -> str:
     """Remove a leading wake phrase from a transcript.
 
@@ -141,6 +158,14 @@ class VoiceSession:
         # repeats. Counting is what makes that terminate.
         self._barge_streak = 0
         self._barge_disabled = False
+        # Microphone levels sampled during the grace period, which is AURA's
+        # own voice and nothing else. The median of these is the echo floor.
+        self._echo_samples: list[float] = []
+        self._barge_threshold = 0.0
+        # Loudest thing heard during this reply that was still too quiet to
+        # count as an interruption. Logged when the turn ends, because a
+        # barge-in that never fires otherwise leaves no evidence at all.
+        self._loudest_ignored = 0.0
         # Whether the turn that just ended earns a follow-up window. A turn
         # that errored or heard nothing does not: reopening the microphone
         # after a failure invites a second failure.
@@ -239,6 +264,30 @@ class VoiceSession:
         finally:
             self._shutdown()
 
+    def _current_barge_threshold(self) -> float:
+        """How loud an interruption has to be, for this reply.
+
+        The median of the grace-period samples rather than the maximum: if the
+        user did start talking early, that contaminates a minority of frames
+        and the median ignores them.
+        """
+        if self._barge_threshold:
+            return self._barge_threshold
+        floor = 0.0
+        if self._echo_samples:
+            ordered = sorted(self._echo_samples)
+            floor = ordered[len(ordered) // 2]
+        self._barge_threshold = max(
+            floor * self._cfg.barge_in_echo_factor, self._cfg.barge_in_min_rms
+        )
+        log.info(
+            "voice.barge_threshold",
+            echo_floor=round(floor, 4),
+            threshold=round(self._barge_threshold, 4),
+            samples=len(self._echo_samples),
+        )
+        return self._barge_threshold
+
     def _play_cue(self, make_cue: Callable[..., Any]) -> None:
         """Play a short cue. Never lets an audio failure break the loop."""
         if not self._cfg.wake_cue:
@@ -253,6 +302,17 @@ class VoiceSession:
         if self._worker is None or self._worker.is_alive():
             return
         self._worker = None
+        if self._loudest_ignored:
+            # Without this, "I said stop and nothing happened" produces no log
+            # line at all, and the only way to find the right threshold is to
+            # guess again.
+            log.info(
+                "voice.barge_in_not_triggered",
+                loudest_heard=round(self._loudest_ignored, 4),
+                threshold=round(self._barge_threshold, 4),
+                hint="raise voice.barge_in_echo_factor if this was you talking",
+            )
+            self._loudest_ignored = 0.0
         # The ring buffer holds AURA's own voice from the frames captured while
         # it was speaking, so it is cleared before listening again. The
         # exception is a barge-in: the tail of the buffer is then the word the
@@ -318,16 +378,21 @@ class VoiceSession:
             # just fills the log with duplicates.
             return
 
+        rms = float(np.sqrt(np.mean(np.square(frame))))
+
         if self._speaking_since and (
             time.monotonic() - self._speaking_since < self._cfg.barge_in_grace_s
         ):
+            # Grace period: whatever the microphone hears now is the echo,
+            # because the user has not had time to react yet. Sample it.
+            self._echo_samples.append(rms)
             return
 
-        rms = float(np.sqrt(np.mean(np.square(frame))))
-        if rms < self._cfg.barge_in_min_rms:
-            # Present but too quiet to be someone talking to us. Feed the
-            # detector nothing so echo cannot accumulate toward the sustain
-            # threshold.
+        threshold = self._current_barge_threshold()
+        if rms < threshold:
+            self._loudest_ignored = max(self._loudest_ignored, rms)
+            # Too quiet to be someone talking to us. Feed the detector nothing,
+            # so echo cannot accumulate toward the sustain threshold.
             self._barge.reset()
             return
 
@@ -406,6 +471,16 @@ class VoiceSession:
                     self._on_text("system", "did not catch that")
                     self._speak_now("Sorry, I didn't catch that.")
                 return
+            if _looks_like_a_stop_attempt(transcript.text, self._cfg.stop_words):
+                # Short, and close to something in the stop list, but not an
+                # exact match. Worth a log line: "I said stop and it answered
+                # anyway" is otherwise impossible to diagnose from the outside.
+                log.info(
+                    "voice.stop_word_near_miss",
+                    text=transcript.text,
+                    hint="add this phrasing to voice.stop_words if it was a cancellation",
+                )
+
             if is_stop_command(transcript.text, self._cfg.stop_words):
                 # A cancellation, not a question. Sending "stop" to the model
                 # would have it explain what stopping means.
@@ -499,6 +574,8 @@ class VoiceSession:
                         (time.perf_counter() - turn_started) * 1000
                     )
                     self._speaking_since = time.monotonic()
+                    self._echo_samples = []
+                    self._barge_threshold = 0.0
                     self._set_state(VoiceState.SPEAKING)
                     self._on_text("aura", text)
                 else:
