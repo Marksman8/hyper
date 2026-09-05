@@ -80,22 +80,56 @@ class FasterWhisperSTT(STTProvider):
         return self._model is not None
 
     def load(self) -> None:
+        """Bring the model into memory, from the local cache where possible.
+
+        faster-whisper resolves a model name through `snapshot_download`, which
+        contacts Hugging Face to check for updates on *every* load, even when
+        the weights are already cached. Observed live: a voice session hung
+        indefinitely inside `socket.create_connection` with a complete 141 MB
+        model sitting on disk.
+
+        That breaks the first promise AURA makes -- it runs locally and does
+        not need the internet -- so the cache is tried first and the network is
+        touched only when there is genuinely nothing to load.
+        """
         if self._model is not None:
             return
         from faster_whisper import WhisperModel
 
         started = time.perf_counter()
-        self._model = WhisperModel(
-            self._model_name,
-            device=self._device,
-            compute_type=self._compute_type,
-            cpu_threads=self._cpu_threads,
-        )
+        try:
+            self._model = WhisperModel(
+                self._model_name,
+                device=self._device,
+                compute_type=self._compute_type,
+                cpu_threads=self._cpu_threads,
+                local_files_only=True,
+            )
+            source = "cache"
+        except Exception as exc:
+            # Not cached yet. This is a first run, so a download is expected --
+            # say so, because it is a few hundred megabytes and otherwise looks
+            # exactly like the hang this code exists to avoid.
+            log.info(
+                "stt.downloading",
+                model=self._model_name,
+                reason=type(exc).__name__,
+                note="not in the local cache; fetching from Hugging Face",
+            )
+            self._model = WhisperModel(
+                self._model_name,
+                device=self._device,
+                compute_type=self._compute_type,
+                cpu_threads=self._cpu_threads,
+            )
+            source = "download"
+
         log.info(
             "stt.loaded",
             model=self._model_name,
             device=self._device,
             compute_type=self._compute_type,
+            source=source,
             load_ms=int((time.perf_counter() - started) * 1000),
         )
 
