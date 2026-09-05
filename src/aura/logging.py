@@ -69,9 +69,25 @@ def _redactor(keys: tuple[str, ...]) -> Any:
     """
     lowered = tuple(k.lower() for k in keys)
 
+    def _is_secret(key: str) -> bool:
+        """Redact on an exact name or a `*_<secret>` suffix, not a substring.
+
+        Secrets are named for what they are and the name ends there:
+        `api_token`, `auth_token`, `client_secret`, `api_key`. Telemetry puts
+        the noun in the middle: `llm_first_token_ms`, `prompt_tokens`.
+
+        A plain `"token" in key` check hit both, which silently destroyed the
+        latency and usage numbers that section 25 exists to provide -- observed
+        live as `llm_first_token_ms=***redacted***` in a real voice turn.
+        Whole-word matching was not enough either, since `llm_first_token_ms`
+        does contain the word "token".
+        """
+        k = key.lower()
+        return any(k == secret or k.endswith("_" + secret) for secret in lowered)
+
     def processor(_logger: Any, _method: str, event_dict: dict[str, Any]) -> dict[str, Any]:
         for k in list(event_dict):
-            if any(s in k.lower() for s in lowered) and event_dict[k]:
+            if _is_secret(k) and event_dict[k]:
                 event_dict[k] = "***redacted***"
         return event_dict
 

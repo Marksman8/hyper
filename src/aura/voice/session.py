@@ -17,13 +17,18 @@ cannot be interrupted is a worse experience than one that is merely slow.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
+
+import numpy as np
 
 from aura.config import Settings
 from aura.logging import get_logger, new_request_id
 from aura.voice.audio.capture import Microphone, RingBuffer
+from aura.voice.audio.cues import dismiss_cue, wake_cue
 from aura.voice.audio.playback import Speaker
 from aura.voice.core_client import CoreClient, CoreUnavailableError
 from aura.voice.stt.base import STTProvider
@@ -34,6 +39,33 @@ from aura.voice.vad import BargeInDetector, Endpointer
 from aura.voice.wake.base import WakeWordDetector
 
 log = get_logger(__name__)
+
+# Speech shorter than this after a wake word is treated as a false trigger
+# rather than a failed utterance, so AURA stays silent instead of
+# apologising to an empty room.
+_FEEDBACK_SPEECH_S = 0.4
+
+# The pre-roll buffer intentionally keeps audio from before the wake word
+# fired, so the transcript usually starts with the trigger phrase itself.
+# Sending "Hey Jarvis, what is X?" to the model wastes context and
+# occasionally derails the answer, so strip it.
+_WAKE_PREFIX = re.compile(
+    r"^\s*(?:hey|hi|ok|okay)?[\s,]*"
+    r"(?:jarvis|aura|mycroft|rhasspy|alexa)\b[\s,.!?-]*",
+    re.IGNORECASE,
+)
+
+
+def strip_wake_phrase(text: str) -> str:
+    """Remove a leading wake phrase from a transcript.
+
+    Only strips a prefix, and only if something is left: "Hey Jarvis" on
+    its own stays intact so it reads as a greeting rather than an empty
+    prompt.
+    """
+    stripped = _WAKE_PREFIX.sub("", text, count=1).strip()
+    return stripped or text.strip()
+
 
 StateCallback = Callable[[VoiceState], None]
 TextCallback = Callable[[str, str], None]  # (speaker, text)
@@ -86,6 +118,7 @@ class VoiceSession:
         self._interrupt = threading.Event()
         self._worker: threading.Thread | None = None
         self._last_activity = time.monotonic()
+        self._speaking_since = 0.0
         self.timings = TurnTimings()
 
     # -- state ---------------------------------------------------------------
@@ -147,6 +180,9 @@ class VoiceSession:
 
                 if self._state is VoiceState.SLEEP:
                     if self._wake.process(frame) is not None:
+                        # Cue first, before anything that could take time. This
+                        # is the user's only confirmation that AURA woke up.
+                        self._play_cue(wake_cue)
                         self._on_text("system", "listening")
                         collector = self._endpointer.begin(preroll=self._ring.read())
                         self._set_state(VoiceState.LISTENING)
@@ -158,6 +194,7 @@ class VoiceSession:
                         collector = None
                         if not segment.has_speech:
                             log.info("voice.false_wake", ended_by=segment.ended_by)
+                            self._play_cue(dismiss_cue)
                             self._ring.clear()
                             self._set_state(VoiceState.SLEEP)
                         else:
@@ -168,6 +205,15 @@ class VoiceSession:
         finally:
             self._shutdown()
 
+    def _play_cue(self, make_cue: Callable[..., Any]) -> None:
+        """Play a short cue. Never lets an audio failure break the loop."""
+        if not self._cfg.wake_cue:
+            return
+        try:
+            self._speaker.play(make_cue(volume=self._cfg.cue_volume))
+        except Exception as exc:
+            log.warning("voice.cue_failed", error=str(exc))
+
     def _reap_finished_turn(self) -> None:
         """Return to SLEEP once the reply worker has exited."""
         if self._worker is None or self._worker.is_alive():
@@ -175,18 +221,51 @@ class VoiceSession:
         self._worker = None
         self._ring.clear()
         self._barge.reset()
+        self._speaking_since = 0.0
         if self._state in (VoiceState.THINKING, VoiceState.SPEAKING):
             self._set_state(VoiceState.SLEEP)
 
     def _check_barge_in(self, frame: AudioArray) -> None:
+        """Interrupt playback when the *user* talks over AURA.
+
+        The hard part is that AURA hears itself. Without acoustic echo
+        cancellation, speaker output bleeds into the microphone and the VAD
+        classifies it as speech -- perfectly correctly, since it is speech.
+        Observed live: AURA cut itself off one second into its own answer.
+
+        Two cheap defences instead of an AEC, which is a project of its own:
+
+        1. A grace period after playback starts. Echo begins the instant the
+           speaker does, so ignoring the first moments removes the common case.
+        2. A loudness floor. Speaker bleed reaching a laptop's mic array is
+           much quieter than a person addressing it, so requiring real level
+           separates the two without any signal processing.
+
+        Headphones remove the problem entirely, which is worth saying out loud
+        rather than pretending the heuristics are a solution.
+        """
         if not self._cfg.barge_in_enabled or self._state is not VoiceState.SPEAKING:
             return
         if self._interrupt.is_set():
             # Already interrupted; the worker is winding down. Re-firing here
             # just fills the log with duplicates.
             return
+
+        if self._speaking_since and (
+            time.monotonic() - self._speaking_since < self._cfg.barge_in_grace_s
+        ):
+            return
+
+        rms = float(np.sqrt(np.mean(np.square(frame))))
+        if rms < self._cfg.barge_in_min_rms:
+            # Present but too quiet to be someone talking to us. Feed the
+            # detector nothing so echo cannot accumulate toward the sustain
+            # threshold.
+            self._barge.reset()
+            return
+
         if self._barge.process(frame):
-            log.info("voice.barge_in")
+            log.info("voice.barge_in", rms=round(rms, 4))
             self._on_text("system", "interrupted")
             self._interrupt.set()
             self._speaker.stop()
@@ -228,14 +307,23 @@ class VoiceSession:
 
             if transcript.is_empty:
                 log.info("voice.nothing_heard", speech_s=round(speech_s, 2))
+                # If there was real speech but nothing came back, say so.
+                # Silence here is indistinguishable from AURA being broken:
+                # the user talked, something was heard, and nothing happened.
+                # A false wake with no speech stays quiet, because announcing
+                # every stray trigger would be worse than the problem.
+                if speech_s >= _FEEDBACK_SPEECH_S:
+                    self._on_text("system", "did not catch that")
+                    self._speak_now("Sorry, I didn't catch that.")
                 return
-            self._on_text("user", transcript.text)
+            prompt = strip_wake_phrase(transcript.text)
+            self._on_text("user", prompt)
 
             streamer = SentenceStreamer()
             spoke_anything = False
             first_token_at = 0.0
 
-            for delta in self._core.stream_reply(transcript.text):
+            for delta in self._core.stream_reply(prompt):
                 if self._interrupt.is_set():
                     log.info("voice.turn_interrupted")
                     return
@@ -294,6 +382,7 @@ class VoiceSession:
                     timings.total_to_first_audio_ms = int(
                         (time.perf_counter() - turn_started) * 1000
                     )
+                    self._speaking_since = time.monotonic()
                     self._set_state(VoiceState.SPEAKING)
                     self._on_text("aura", text)
                 else:

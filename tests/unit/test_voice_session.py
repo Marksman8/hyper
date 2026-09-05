@@ -147,6 +147,8 @@ def make_settings(**voice_overrides: Any) -> Settings:
         "listen_timeout_s": 0.5,
         "preroll_s": 0.2,
         "barge_in_s": 0.15,
+        "barge_in_grace_s": 0.15,
+        "barge_in_min_rms": 0.02,
         "idle_unload_s": 0.0,
         "wake": WakeConfig(model="null"),
         "stt": STTConfig(provider="null"),
@@ -330,8 +332,8 @@ def test_barge_in_stops_playback_mid_reply(rig: Any) -> None:
         rig["speaker"],
     )
     stt.push("tell me a long story")
-    core.reply = " ".join(f"Sentence number {i}." for i in range(1, 25))
-    core.delay_s = 0.02  # keep the reply streaming long enough to interrupt
+    core.reply = " ".join(f"Sentence number {i}." for i in range(1, 40))
+    core.delay_s = 0.03  # outlast the barge-in grace period
 
     thread = run_session(session)
     try:
@@ -347,8 +349,9 @@ def test_barge_in_stops_playback_mid_reply(rig: Any) -> None:
         )
         spoken_before = len(rig["tts"].spoken)
 
-        # The user starts talking over the reply.
-        mic.feed(speech_frame(), times=10)
+        # Wait out the grace period, then talk over the reply.
+        time.sleep(0.2)
+        mic.feed(speech_frame(), times=20)
 
         assert wait_for(lambda: speaker.stop_calls > 0, timeout=5.0), (
             "playback was not stopped by barge-in"
@@ -356,7 +359,7 @@ def test_barge_in_stops_playback_mid_reply(rig: Any) -> None:
         assert wait_for(lambda: session.state is VoiceState.SLEEP, timeout=6.0)
 
         # And it stopped early rather than running to the end of the reply.
-        assert len(rig["tts"].spoken) < 24, (
+        assert len(rig["tts"].spoken) < 39, (
             f"spoke {len(rig['tts'].spoken)} sentences; barge-in did not cut the reply short"
         )
         assert len(rig["tts"].spoken) >= spoken_before
@@ -372,3 +375,47 @@ def test_barge_in_can_be_disabled(rig: Any) -> None:
     session._set_state(VoiceState.SPEAKING)
     session._check_barge_in(speech_frame())
     assert rig["speaker"].stop_calls == 0
+
+
+def test_quiet_audio_does_not_trigger_barge_in(rig: Any) -> None:
+    """AURA's own voice bleeding into the mic must not interrupt it.
+
+    Without acoustic echo cancellation the VAD correctly classifies speaker
+    output as speech. The loudness floor is what separates "AURA hearing
+    itself" from "the user talking", and it is why AURA cut itself off one
+    second into its first real answer before this guard existed.
+    """
+    session = rig["session"]
+    session._speaking_since = time.monotonic() - 10.0
+    session._set_state(VoiceState.SPEAKING)
+
+    quiet = np.full(FRAME, 0.005, dtype=np.float32)  # below barge_in_min_rms
+    for _ in range(30):
+        session._check_barge_in(quiet)
+    assert rig["speaker"].stop_calls == 0, "quiet echo interrupted playback"
+
+
+def test_grace_period_suppresses_immediate_echo(rig: Any) -> None:
+    """Echo starts the instant the speaker does, so the first moments are ignored."""
+    session = rig["session"]
+    session._speaking_since = time.monotonic()
+    session._set_state(VoiceState.SPEAKING)
+
+    for _ in range(30):
+        session._check_barge_in(speech_frame())
+    assert rig["speaker"].stop_calls == 0, "barge-in fired inside the grace period"
+
+
+def test_loud_speech_after_grace_does_trigger_barge_in(rig: Any) -> None:
+    """The guards must not make barge-in unusable."""
+    session = rig["session"]
+    session._speaking_since = time.monotonic() - 10.0
+    session._set_state(VoiceState.SPEAKING)
+
+    fired = False
+    for _ in range(30):
+        session._check_barge_in(speech_frame())
+        if rig["speaker"].stop_calls:
+            fired = True
+            break
+    assert fired, "loud sustained speech after the grace period should interrupt"

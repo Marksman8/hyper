@@ -171,9 +171,13 @@ class STTConfig(_Section):
     device: str = "cpu"
     compute_type: str = "int8"
     language: str = "en"
-    # Drop transcripts the decoder was unsure about; a half-second of keyboard
-    # noise otherwise transcribes as confident nonsense.
-    min_confidence: float = Field(default=-1.0, le=0.0)
+    # Drop transcripts the decoder was unsure about. Whisper's avg_logprob
+    # is around -0.2 for clean speech and -0.8 to -1.2 for a normal short
+    # utterance in a real room; only clear garbage falls below -1.5. An
+    # earlier default of -1.0 silently discarded genuine speech, which is
+    # the worst failure mode available here: the user talks, AURA hears,
+    # and nothing happens.
+    min_confidence: float = Field(default=-1.5, le=0.0)
     beam_size: int = Field(default=1, ge=1, le=10)
 
 
@@ -191,6 +195,12 @@ class VoiceConfig(_Section):
     enabled: bool = True
     input_device: str = ""
     output_device: str = ""
+    # A short blip when AURA starts listening, and a lower one when it gives up
+    # without answering. Without a cue the only signal that the wake word fired
+    # is a log line, and the honest user question during the seconds before the
+    # first spoken word is "is this thing even on?".
+    wake_cue: bool = True
+    cue_volume: float = Field(default=0.18, gt=0.0, le=1.0)
     # Seconds of audio kept before the wake word fires, so a request run into
     # the trigger phrase does not lose its first word.
     preroll_s: float = Field(default=1.5, ge=0.0, le=5.0)
@@ -204,6 +214,14 @@ class VoiceConfig(_Section):
     # Speech during playback for this long interrupts it.
     barge_in_s: float = Field(default=0.35, gt=0.0, le=2.0)
     barge_in_enabled: bool = True
+    # Without acoustic echo cancellation, AURA's own voice reaches the
+    # microphone and reads as speech. These two guards keep it from
+    # interrupting itself; headphones make both unnecessary.
+    #   grace: ignore the microphone for this long after playback starts
+    #   min_rms: require real loudness, since speaker bleed is much quieter
+    #            than a person addressing the machine
+    barge_in_grace_s: float = Field(default=1.0, ge=0.0, le=10.0)
+    barge_in_min_rms: float = Field(default=0.02, ge=0.0, le=1.0)
     # Unload STT after this long idle. On a 16 GB machine this is not an
     # optimisation, it is what lets AURA coexist with a browser.
     idle_unload_s: float = Field(default=180.0, ge=0.0)

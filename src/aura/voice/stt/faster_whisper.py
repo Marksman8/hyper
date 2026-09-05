@@ -135,10 +135,17 @@ class FasterWhisperSTT(STTProvider):
         confidence = sum(logprobs) / len(logprobs) if logprobs else -10.0
 
         if text.lower().strip() in _HALLUCINATIONS:
-            log.debug("stt.hallucination_dropped", text=text)
+            log.info("stt.hallucination_dropped", text=text)
             text = ""
         elif confidence < self._min_confidence:
-            log.debug("stt.low_confidence_dropped", text=text, confidence=round(confidence, 2))
+            # INFO, not DEBUG: discarding what the user actually said is a
+            # decision they deserve to be able to see and tune.
+            log.info(
+                "stt.low_confidence_dropped",
+                text=text,
+                confidence=round(confidence, 2),
+                threshold=self._min_confidence,
+            )
             text = ""
 
         log.info(
