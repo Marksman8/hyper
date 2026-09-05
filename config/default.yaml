@@ -1,0 +1,86 @@
+# AURA default configuration.
+#
+# Precedence (lowest to highest):
+#   1. this file
+#   2. config/local.yaml        (gitignored, your machine-specific overrides)
+#   3. .env / environment       (AURA__SECTION__FIELD, e.g. AURA__API__PORT)
+#
+# Secrets belong in .env or var/secrets/, never here.
+
+app:
+  name: aura
+  version: "0.1.0"
+  # Emergency stop (spec section 13/23). When true, AURA accepts requests but
+  # refuses every outbound model call and (later) every tool execution.
+  # Flipped at runtime via POST /v1/control/estop.
+  emergency_stop: false
+
+api:
+  # Loopback only. Binding to 0.0.0.0 exposes an unauthenticated-by-default
+  # surface to the local network; the config validator rejects it.
+  host: "127.0.0.1"
+  port: 8760
+  cors_origins: []
+  request_timeout_s: 300
+
+llm:
+  # The replaceability seam. Any OpenAI-compatible server satisfies this.
+  provider: "openai_compat"
+  base_url: "http://127.0.0.1:8081/v1"
+  api_key: ""
+  # "default" means "whatever the server has loaded" - llama-server ignores the
+  # model field. Set explicitly when pointing at Ollama or vLLM.
+  model: "default"
+  # Generation defaults. Overridable per request.
+  temperature: 0.7
+  top_p: 0.95
+  max_tokens: 1024
+  # Wall-clock ceiling for one generation.
+  timeout_s: 180
+  # Connection attempts before declaring the model server unavailable.
+  connect_retries: 2
+
+memory:
+  db_path: "var/data/aura.db"
+  # Turns of history replayed into the prompt. Kept small because a 4B model at
+  # 8k context degrades well before it runs out of tokens.
+  history_turns: 12
+  # Hard ceiling on characters of history assembled into a prompt, as a cheap
+  # stand-in for token counting until a tokenizer is wired in (Phase 2).
+  history_char_budget: 12000
+
+security:
+  api_token: ""              # generated into var/secrets/api_token if blank
+  token_file: "var/secrets/api_token"
+  audit_enabled: true
+  # Deny model calls entirely if the audit log cannot be written. Fail closed.
+  require_audit: true
+
+runtime:
+  # Supervisor for the model server subprocess. Disabled by default in v0.1:
+  # you start llama-server yourself via scripts/start_model_server.ps1 so that
+  # failures are visible rather than swallowed by a supervisor.
+  manage_model_server: false
+  resource_poll_s: 10
+
+logging:
+  level: "INFO"
+  format: "console"          # console | json
+  file: "var/logs/aura.log"
+  # Redact these config keys anywhere they would be serialized.
+  redact_keys: ["api_token", "api_key", "password", "secret", "token"]
+
+persona:
+  # v0.1 system prompt. Deliberately minimal - personality is a Phase 7 concern
+  # driven by the user model, not a hand-written paragraph that grows forever.
+  name: "AURA"
+  system_prompt: |
+    You are AURA, a local-first personal AI assistant running entirely on the
+    user's own machine. You are direct, concise, and technically precise.
+
+    Guidelines:
+    - Answer the question that was asked. Do not pad.
+    - If you do not know something, say so plainly.
+    - You have no ability to execute code, browse the web, see the screen, or
+      modify files. Do not claim otherwise or pretend to perform actions.
+    - Prefer concrete specifics over hedged generalities.

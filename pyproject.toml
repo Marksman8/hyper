@@ -1,0 +1,79 @@
+[project]
+name = "aura"
+version = "0.1.0"
+description = "AURA - Autonomous Unified Reasoning Assistant. Local-first, model-agnostic personal AI runtime."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+
+# v0.1 dependency policy: NO torch, NO transformers.
+# All inference (chat + embeddings) is served by an external OpenAI-compatible
+# process (llama.cpp `llama-server`). AURA core stays a thin, fast-starting,
+# CPU-only application. Heavy ML deps enter only when a phase actually needs
+# them (Phase 2: STT/TTS, Phase 5: vision, Phase 8: LoRA).
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "httpx>=0.27",
+    "structlog>=24.4",
+    "pyyaml>=6.0",
+    "typer>=0.15",
+    "rich>=13.9",
+    "psutil>=6.1",
+]
+
+[project.scripts]
+aura = "aura.__main__:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "respx>=0.21",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "types-PyYAML",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aura"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "RUF", "ASYNC", "S"]
+ignore = ["S101"]  # assert is fine in tests
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B"]
+# Depends() in argument defaults is the FastAPI idiom, not a mutable default.
+"src/aura/api/*.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+disallow_untyped_defs = true
+mypy_path = "src"
+packages = ["aura"]
+
+[[tool.mypy.overrides]]
+module = ["psutil.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "integration: requires a running model server",
+]

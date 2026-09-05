@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# AURA runtime state - never commit
+var/
+!var/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+*.gguf
+
+# Secrets - never commit
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+
+# Local overrides
+config/local.yaml
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

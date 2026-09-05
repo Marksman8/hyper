@@ -1,0 +1,55 @@
+# Model catalogue for AURA.
+#
+# Swapping AURA's brain is a change to `active` plus restarting the model
+# server. It must never require a code change. (spec section 32)
+#
+# vram_gb figures are measured or estimated for weights + a modest KV cache on
+# an 8 GB card. Anything above ~6.5 GB will not leave room for Phase 2/5 models.
+
+active: qwen3-4b-instruct
+
+catalogue:
+  qwen3-4b-instruct:
+    display_name: "Qwen3 4B Instruct 2507"
+    repo_id: "Qwen/Qwen3-4B-Instruct-2507-GGUF"
+    filename: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+    quantization: "Q4_K_M"
+    context_length: 8192
+    vram_gb: 3.1
+    gpu_layers: -1              # -1 = offload all layers
+    supports_tools: true
+    notes: "v0.1 default. Best tool-calling per GB in this size class."
+
+  qwen3-8b:
+    display_name: "Qwen3 8B"
+    repo_id: "Qwen/Qwen3-8B-GGUF"
+    filename: "Qwen3-8B-Q4_K_M.gguf"
+    quantization: "Q4_K_M"
+    context_length: 8192
+    vram_gb: 5.0
+    gpu_layers: -1
+    supports_tools: true
+    notes: "Foreground mode. Better reasoning, leaves ~2.5 GB headroom - not
+            enough for vision alongside it."
+
+  llama-3.1-8b-instruct:
+    display_name: "Llama 3.1 8B Instruct"
+    repo_id: "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF"
+    filename: "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+    quantization: "Q4_K_M"
+    context_length: 8192
+    vram_gb: 4.9
+    gpu_layers: -1
+    supports_tools: true
+    notes: "Alternative 8B. Weaker structured output than Qwen3 in practice."
+
+  mistral-7b-instruct:
+    display_name: "Mistral 7B Instruct v0.3"
+    repo_id: "bartowski/Mistral-7B-Instruct-v0.3-GGUF"
+    filename: "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
+    quantization: "Q4_K_M"
+    context_length: 8192
+    vram_gb: 4.4
+    gpu_layers: -1
+    supports_tools: true
+    notes: "Fast, permissive licence. Fallback option."
