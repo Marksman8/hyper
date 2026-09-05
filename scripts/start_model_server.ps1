@@ -19,13 +19,22 @@
 .PARAMETER GpuLayers
     Layers to offload. -1 offloads everything (the default and what you want
     when the model fits). Lower it if you hit CUDA OOM.
+
+.PARAMETER Reasoning
+    off | on | auto. Qwen3.x and other reasoning models emit chain-of-thought
+    into a separate `reasoning_content` field before answering. Left on with a
+    small token budget, they can spend the entire budget thinking and return an
+    empty answer. v0.1 conversation wants low latency, so the default is off;
+    turn it on for hard problems, and expect the Phase 4 agent loop to want it.
 #>
 [CmdletBinding()]
 param(
     [string]$Model = "",
     [int]$Port = 8081,
     [int]$Context = 0,
-    [int]$GpuLayers = -999
+    [int]$GpuLayers = -999,
+    [ValidateSet("off", "on", "auto")]
+    [string]$Reasoning = "off"
 )
 
 $ErrorActionPreference = "Stop"
@@ -77,12 +86,34 @@ if ($smi) {
     }
 }
 
+# --- Shared secret for the model server --------------------------------------
+# llama-server ships with no auth and Access-Control-Allow-Origin: *. Binding to
+# loopback is not enough: any web page you visit can POST to 127.0.0.1:8081 and
+# use your GPU, or read whatever is in the KV cache. AURA reads the same file
+# via llm.api_key_file, so this needs no configuration.
+$secretDir = Join-Path $root "var\secrets"
+$secretFile = Join-Path $secretDir "model_api_token"
+New-Item -ItemType Directory -Force -Path $secretDir | Out-Null
+if (-not (Test-Path $secretFile)) {
+    $bytes = [byte[]]::new(32)
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $token = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    # NOT Set-Content -Encoding utf8: on Windows PowerShell 5.1 that writes a
+    # UTF-8 BOM, and the BOM bytes end up inside the token any reader that does
+    # not strip them, producing a 401 that looks like a wrong key.
+    [System.IO.File]::WriteAllText($secretFile, $token, (New-Object System.Text.UTF8Encoding($false)))
+    & "$env:SystemRoot\System32\icacls.exe" $secretFile /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
+    Write-Host "  Generated model server token: var\secrets\model_api_token" -ForegroundColor DarkGray
+}
+$apiKey = (Get-Content $secretFile -Raw).Trim()
+
 Write-Host ""
 Write-Host "AURA model server" -ForegroundColor Cyan
-Write-Host "  Model:   $($cfg.name)  [$($cfg.key)]"
-Write-Host "  Context: $ctx tokens"
-Write-Host "  Layers:  $(if ($ngl -eq -1) { 'all on GPU' } else { "$ngl on GPU" })"
-Write-Host "  API:     http://127.0.0.1:$Port/v1"
+Write-Host "  Model:     $($cfg.name)  [$($cfg.key)]"
+Write-Host "  Context:   $ctx tokens"
+Write-Host "  Layers:    $(if ($ngl -eq -1) { 'all on GPU' } else { "$ngl on GPU" })"
+Write-Host "  Reasoning: $Reasoning"
+Write-Host "  API:       http://127.0.0.1:$Port/v1  (bearer token required)"
 Write-Host ""
 
 # --host 127.0.0.1 is deliberate: the model server must not be reachable off
@@ -91,10 +122,12 @@ Write-Host ""
     --model $cfg.file `
     --host 127.0.0.1 `
     --port $Port `
+    --api-key $apiKey `
     --ctx-size $ctx `
     --n-gpu-layers $ngl `
     --cache-type-k q8_0 `
     --cache-type-v q8_0 `
     --flash-attn on `
     --jinja `
+    --reasoning $Reasoning `
     --alias aura-local

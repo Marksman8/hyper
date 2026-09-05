@@ -33,7 +33,7 @@ Full reasoning: [`docs/architecture/00-v0.1-architecture.md`](docs/architecture/
 - Windows 11 (Linux/macOS should work; only Windows is exercised)
 - Python **3.12** (managed by `uv` — your system Python is untouched)
 - NVIDIA GPU with 6+ GB VRAM recommended; 8 GB is the design target
-- ~4 GB disk for the default model
+- ~4 GB disk for the default model (Qwen3.5 4B, Q4_K_M)
 
 ## Setup
 
@@ -44,7 +44,7 @@ uv sync
 # 2. Check the machine
 uv run aura doctor
 
-# 3. Fetch the default model (~2.5 GB)
+# 3. Fetch the default model (~2.7 GB)
 uv run python scripts/download_model.py
 
 # 4. Fetch llama.cpp with CUDA support
@@ -79,6 +79,11 @@ provider seam.
 
 Every route needs `Authorization: Bearer <token>`, including from localhost.
 The token is generated on first run into `var/secrets/api_token`.
+
+The model server has its own separate token (`var/secrets/model_api_token`,
+written by the launch script). llama-server ships with no auth and
+`Access-Control-Allow-Origin: *`, so without it any web page you visit could
+drive your GPU on 127.0.0.1:8081.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -128,8 +133,8 @@ var/           runtime state - db, logs, weights, secrets (gitignored)
 
 ```powershell
 uv run pytest              # tests
-uv run ruff check src tests
-uv run ruff format src tests
+uv run ruff check src tests scripts
+uv run ruff format src tests scripts
 uv run mypy                # strict
 uv run aura serve --reload
 ```

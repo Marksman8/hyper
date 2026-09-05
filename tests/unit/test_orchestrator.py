@@ -64,9 +64,7 @@ def recorder() -> RecordingProvider:
 
 
 @pytest.fixture
-def orch(
-    settings: Settings, store: MemoryStore, recorder: RecordingProvider
-) -> Orchestrator:
+def orch(settings: Settings, store: MemoryStore, recorder: RecordingProvider) -> Orchestrator:
     return Orchestrator(settings, recorder, store, AuditLog(store))
 
 
@@ -122,9 +120,7 @@ async def test_history_is_trimmed_to_the_configured_turn_count(
     orch = Orchestrator(settings, recorder, store, AuditLog(store))
     session = await store.create_session()
     for i in range(20):
-        await store.add_turn(
-            Turn(session_id=session.id, role=Role.USER, content=f"old-{i}")
-        )
+        await store.add_turn(Turn(session_id=session.id, role=Role.USER, content=f"old-{i}"))
 
     await orch.chat("new", session_id=session.id)
     replayed = [m.content for m in recorder.calls[0] if m.role is Role.USER]

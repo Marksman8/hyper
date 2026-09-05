@@ -30,7 +30,7 @@ from rich.table import Table
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from aura.config import ModelEntry, get_model_catalogue, models_dir  # noqa: E402
+from aura.config import ModelEntry, get_model_catalogue, models_dir
 
 console = Console()
 HF_BASE = "https://huggingface.co"
@@ -118,7 +118,9 @@ def main() -> int:
         console.print(f"[green]Already present:[/green] {dest}")
         return 0
 
-    console.print(f"[bold]{entry.display_name}[/bold]  ({entry.quantization}, ~{entry.vram_gb} GB VRAM)")
+    console.print(
+        f"[bold]{entry.display_name}[/bold]  ({entry.quantization}, ~{entry.vram_gb} GB VRAM)"
+    )
     console.print(f"[dim]{entry.repo_id}[/dim]\n")
 
     try:
@@ -126,9 +128,22 @@ def main() -> int:
     except httpx.HTTPStatusError as exc:
         console.print(f"[red]HTTP {exc.response.status_code}[/red] fetching {exc.request.url}")
         if exc.response.status_code in (401, 403):
-            console.print("[yellow]Gated repo. Accept its licence on Hugging Face, then set HF_TOKEN.[/yellow]")
+            # Hugging Face returns 401 for "does not exist" as well as for
+            # "gated" and "private" - it deliberately does not distinguish, to
+            # avoid leaking the existence of private repos. So check the
+            # obvious cause first.
+            console.print(
+                "[yellow]A 401 from Hugging Face means the repo is gated, private, "
+                "or does not exist under that name - it does not distinguish.[/yellow]"
+            )
+            console.print(f"  Check it resolves:  {HF_BASE}/{entry.repo_id}")
+            console.print("  If it is gated:     accept the licence, then set HF_TOKEN.")
+            console.print("  If it is a typo:    fix config/models.yaml.")
         if exc.response.status_code == 404:
-            console.print("[yellow]Check repo_id/filename in config/models.yaml against the repo's file list.[/yellow]")
+            console.print(
+                f"[yellow]Repo exists but {entry.filename!r} is not in it. "
+                f"See https://huggingface.co/{entry.repo_id}/tree/main[/yellow]"
+            )
         return 1
     except httpx.HTTPError as exc:
         console.print(f"[red]Download failed:[/red] {exc}")

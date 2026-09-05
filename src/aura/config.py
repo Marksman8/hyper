@@ -80,6 +80,11 @@ class LLMConfig(_Section):
     provider: str = "openai_compat"
     base_url: str = "http://127.0.0.1:8081/v1"
     api_key: str = ""
+    # Where the model server's shared secret lives when api_key is not set
+    # explicitly. llama-server has no auth by default and allows all CORS
+    # origins, so any web page you visit can reach 127.0.0.1:8081 and use your
+    # GPU. start_model_server.ps1 writes this file; AURA reads it.
+    api_key_file: str = "var/secrets/model_api_token"
     model: str = "default"
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.95, gt=0.0, le=1.0)
@@ -91,6 +96,23 @@ class LLMConfig(_Section):
     @classmethod
     def _strip_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    def resolved_api_key(self) -> str:
+        """The model server secret: explicit config, else the key file, else none.
+
+        Absent is tolerated (a bare llama-server with no --api-key still works),
+        so upgrading an existing setup does not break it.
+        """
+        if self.api_key:
+            return self.api_key
+        path = Path(self.api_key_file)
+        path = path if path.is_absolute() else PROJECT_ROOT / path
+        if path.is_file():
+            # utf-8-sig, not utf-8: this file may be written by a PowerShell
+            # script, and Windows PowerShell 5.1 emits a UTF-8 BOM. Leaving the
+            # BOM in the token yields a 401 that looks like a wrong secret.
+            return path.read_text(encoding="utf-8-sig").strip()
+        return ""
 
 
 class MemoryConfig(_Section):

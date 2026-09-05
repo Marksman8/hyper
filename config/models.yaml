@@ -3,22 +3,42 @@
 # Swapping AURA's brain is a change to `active` plus restarting the model
 # server. It must never require a code change. (spec section 32)
 #
-# vram_gb figures are measured or estimated for weights + a modest KV cache on
-# an 8 GB card. Anything above ~6.5 GB will not leave room for Phase 2/5 models.
+# Every repo_id/filename pair below was verified to resolve on Hugging Face.
+# If you add an entry, check it first:
+#   curl -sIo /dev/null -w "%{http_code}" \
+#     https://huggingface.co/<repo_id>/resolve/main/<filename>
+# 302 means good (redirect to the CDN); 401 means the repo or file is not
+# public under that name.
+#
+# vram_gb is weights plus a modest KV cache on an 8 GB card. Anything above
+# ~6.5 GB leaves no room for the Phase 2/5 models.
 
-active: qwen3-4b-instruct
+active: qwen3.5-4b
 
 catalogue:
-  qwen3-4b-instruct:
+  qwen3.5-4b:
+    display_name: "Qwen3.5 4B"
+    repo_id: "unsloth/Qwen3.5-4B-GGUF"
+    filename: "Qwen3.5-4B-Q4_K_M.gguf"
+    quantization: "Q4_K_M"
+    context_length: 8192
+    vram_gb: 3.3
+    gpu_layers: -1
+    supports_tools: true
+    notes: "v0.1 default. Newest 4B generation; best tool-calling per GB in
+            this size class, which is what Phases 3-4 need."
+
+  qwen3-4b-instruct-2507:
     display_name: "Qwen3 4B Instruct 2507"
-    repo_id: "Qwen/Qwen3-4B-Instruct-2507-GGUF"
+    repo_id: "unsloth/Qwen3-4B-Instruct-2507-GGUF"
     filename: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
     quantization: "Q4_K_M"
     context_length: 8192
     vram_gb: 3.1
-    gpu_layers: -1              # -1 = offload all layers
+    gpu_layers: -1
     supports_tools: true
-    notes: "v0.1 default. Best tool-calling per GB in this size class."
+    notes: "Previous generation. Slightly smaller; keep as a fallback if
+            Qwen3.5 regresses on a task you care about."
 
   qwen3-8b:
     display_name: "Qwen3 8B"
@@ -29,8 +49,8 @@ catalogue:
     vram_gb: 5.0
     gpu_layers: -1
     supports_tools: true
-    notes: "Foreground mode. Better reasoning, leaves ~2.5 GB headroom - not
-            enough for vision alongside it."
+    notes: "Foreground mode. Better reasoning, but ~2.5 GB headroom is not
+            enough to run vision alongside it."
 
   llama-3.1-8b-instruct:
     display_name: "Llama 3.1 8B Instruct"
@@ -41,7 +61,7 @@ catalogue:
     vram_gb: 4.9
     gpu_layers: -1
     supports_tools: true
-    notes: "Alternative 8B. Weaker structured output than Qwen3 in practice."
+    notes: "Alternative 8B. Weaker structured output than Qwen in practice."
 
   mistral-7b-instruct:
     display_name: "Mistral 7B Instruct v0.3"

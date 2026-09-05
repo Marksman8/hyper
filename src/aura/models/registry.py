@@ -27,7 +27,7 @@ def _build_openai_compat(settings: Settings) -> LLMProvider:
     return OpenAICompatProvider(
         base_url=cfg.base_url,
         model=cfg.model,
-        api_key=cfg.api_key,
+        api_key=cfg.resolved_api_key(),
         timeout_s=float(cfg.timeout_s),
         connect_retries=cfg.connect_retries,
         default_params=GenerationParams(

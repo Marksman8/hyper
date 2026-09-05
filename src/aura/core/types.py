@@ -105,6 +105,13 @@ class ChatResult:
     usage: Usage = field(default_factory=Usage)
     finish_reason: str = "stop"
     latency_ms: int = 0
+    # Chain-of-thought, when the model produces it as a separate channel.
+    # Modelled as its own field rather than folded into `content` because the
+    # two have different lifetimes: the answer is replayed into later prompts,
+    # the reasoning is not. It is kept because it is the best available
+    # evidence for "why did AURA do this?" (spec section 25) and will be what
+    # the Phase 4 agent loop inspects when a plan goes wrong.
+    reasoning: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -112,14 +119,17 @@ class ChatResult:
 class ChatChunk:
     """One increment of a streaming generation.
 
-    `delta` is the new text only. The terminal chunk has `done=True`, may carry
-    an empty delta, and is the only chunk guaranteed to have usage populated.
+    `delta` is the new answer text only. `reasoning_delta` carries thinking
+    tokens, which most callers should not render. The terminal chunk has
+    `done=True`, may carry an empty delta, and is the only chunk guaranteed to
+    have usage populated.
     """
 
     delta: str
     done: bool = False
     finish_reason: str | None = None
     usage: Usage | None = None
+    reasoning_delta: str = ""
 
 
 @dataclass(slots=True, frozen=True)

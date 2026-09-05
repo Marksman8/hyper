@@ -110,9 +110,20 @@ def doctor() -> None:
             "have no 3.13/3.14 wheels. Run: uv sync"
         )
 
-    _row("RAM", f"{res.ram_used_gb:.1f} / {res.ram_total_gb:.1f} GB used", res.ram_percent < 90)
+    ram_ok = res.ram_percent < 90
+    _row("RAM", f"{res.ram_used_gb:.1f} / {res.ram_total_gb:.1f} GB used", ram_ok)
     if res.ram_total_gb < 15:
         problems.append("Under 16 GB RAM. Expect to run the 4B model only.")
+    if not ram_ok:
+        # System RAM, not VRAM, is the binding constraint on this class of
+        # machine, so a marker without a message would hide the most likely
+        # cause of poor behaviour.
+        problems.append(
+            f"System RAM is {res.ram_percent:.0f}% used with only "
+            f"{res.ram_total_gb - res.ram_used_gb:.1f} GB free. AURA will run, but "
+            "voice and vision (Phases 2 and 5) need headroom - close some "
+            "browser tabs before adding subsystems."
+        )
 
     if res.vram_total_gb is not None:
         free = res.vram_total_gb - (res.vram_used_gb or 0)

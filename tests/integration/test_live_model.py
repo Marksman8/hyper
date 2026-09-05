@@ -21,26 +21,52 @@ from aura.models.providers.openai_compat import OpenAICompatProvider
 pytestmark = pytest.mark.integration
 
 
-def _server_is_up(base_url: str) -> bool:
+def _server_is_up(base_url: str, api_key: str) -> bool:
+    headers = {"Authorization": "Bearer " + api_key} if api_key else {}
     try:
-        return httpx.get(base_url + "/models", timeout=2.0).status_code < 400
+        return httpx.get(base_url + "/models", headers=headers, timeout=2.0).status_code < 400
     except httpx.HTTPError:
         return False
 
 
 @pytest.fixture(scope="module")
-def base_url() -> str:
-    url = get_settings().llm.base_url
-    if not _server_is_up(url):
-        pytest.skip(f"No model server at {url}. Start scripts/start_model_server.ps1 first.")
-    return url
+def live() -> tuple[str, str]:
+    """(base_url, api_key) for a reachable model server, or skip."""
+    cfg = get_settings().llm
+    key = cfg.resolved_api_key()
+    if not _server_is_up(cfg.base_url, key):
+        pytest.skip(
+            f"No model server at {cfg.base_url}. Start scripts/start_model_server.ps1 first."
+        )
+    return cfg.base_url, key
 
 
 @pytest.fixture
-async def provider(base_url: str):  # type: ignore[no-untyped-def]
-    p = OpenAICompatProvider(base_url, timeout_s=120.0)
+async def provider(live: tuple[str, str]):  # type: ignore[no-untyped-def]
+    base_url, api_key = live
+    p = OpenAICompatProvider(base_url, api_key=api_key, timeout_s=120.0)
     yield p
     await p.close()
+
+
+async def test_the_model_server_rejects_unauthenticated_requests(
+    live: tuple[str, str],
+) -> None:
+    """llama-server has no auth by default and allows every CORS origin.
+
+    Without a key, any web page the user visits can drive the model on
+    127.0.0.1. start_model_server.ps1 sets --api-key for exactly this reason,
+    so verify it actually took effect.
+    """
+    base_url, api_key = live
+    if not api_key:
+        pytest.skip("No model server API key configured.")
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            base_url + "/chat/completions",
+            json={"messages": [{"role": "user", "content": "hi"}], "max_tokens": 4},
+        )
+    assert resp.status_code == 401
 
 
 async def test_health_reports_the_loaded_model(provider: OpenAICompatProvider) -> None:
@@ -61,10 +87,32 @@ async def test_it_answers_a_factual_question(provider: OpenAICompatProvider) -> 
             Message(role=Role.SYSTEM, content="Answer with a single word."),
             Message(role=Role.USER, content="What is the capital of France?"),
         ],
-        GenerationParams(temperature=0.0, max_tokens=16),
+        GenerationParams(temperature=0.0, max_tokens=32),
     )
-    assert "paris" in result.content.lower()
+    assert "paris" in result.content.lower(), (
+        f"empty or wrong answer (finish={result.finish_reason}, "
+        f"reasoning={result.reasoning[:80]!r}). If content is empty and "
+        "reasoning is populated, the server is running with reasoning enabled "
+        "and the token budget was spent thinking - start it with -Reasoning off."
+    )
     assert result.usage.completion_tokens > 0
+
+
+async def test_reasoning_is_off_by_default(provider: OpenAICompatProvider) -> None:
+    """Qwen3.x emits chain-of-thought unless the server disables it.
+
+    Left on, a short max_tokens produces an empty answer and a long latency, so
+    v0.1 conversation runs with it off. This asserts the launch script's default
+    actually reached the server.
+    """
+    result = await provider.chat(
+        [Message(role=Role.USER, content="Say the word: ok")],
+        GenerationParams(temperature=0.0, max_tokens=32),
+    )
+    assert result.reasoning == "", (
+        "server is emitting reasoning_content; restart it with -Reasoning off"
+    )
+    assert result.content.strip()
 
 
 async def test_streaming_produces_multiple_chunks(

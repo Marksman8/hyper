@@ -206,7 +206,13 @@ class OpenAICompatProvider(LLMProvider):
         if not choices:
             raise ProviderError("Model server returned no choices.")
         choice = choices[0]
-        content = (choice.get("message") or {}).get("content") or ""
+        message = choice.get("message") or {}
+        content = message.get("content") or ""
+        # Reasoning models (Qwen3.x, DeepSeek-R1, gpt-oss) return thinking in a
+        # separate field. An empty `content` with a populated `reasoning_content`
+        # and finish_reason="length" means the token budget was spent thinking
+        # before the model reached an answer.
+        reasoning = message.get("reasoning_content") or ""
 
         return ChatResult(
             content=content,
@@ -215,6 +221,7 @@ class OpenAICompatProvider(LLMProvider):
             usage=self._usage(raw),
             finish_reason=str(choice.get("finish_reason") or "stop"),
             latency_ms=latency_ms,
+            reasoning=reasoning,
             raw=raw,
         )
 
@@ -251,7 +258,14 @@ class OpenAICompatProvider(LLMProvider):
                     for choice in event.get("choices") or []:
                         if choice.get("finish_reason"):
                             finish_reason = str(choice["finish_reason"])
-                        delta = (choice.get("delta") or {}).get("content")
+                        delta_obj = choice.get("delta") or {}
+                        delta = delta_obj.get("content")
+                        thought = delta_obj.get("reasoning_content")
+                        # Emitted as separate chunks so a caller can render the
+                        # answer while ignoring, logging, or separately
+                        # displaying the thinking.
+                        if thought:
+                            yield ChatChunk(delta="", reasoning_delta=thought)
                         if delta:
                             yield ChatChunk(delta=delta)
         except httpx.HTTPError as exc:

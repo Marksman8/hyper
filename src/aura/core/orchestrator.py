@@ -176,6 +176,10 @@ class Orchestrator:
                 completion_tokens=result.usage.completion_tokens,
                 latency_ms=latency_ms,
                 finish_reason=result.finish_reason,
+                # Stored, never replayed. Turn.to_message() sends only
+                # `content` back to the model, which is what reasoning models
+                # expect: thinking from a previous turn is not context.
+                metadata={"reasoning": result.reasoning} if result.reasoning else {},
             )
         )
         await self._audit.record(
@@ -225,6 +229,7 @@ class Orchestrator:
         session, messages = await self._open_turn(session_id, user_text)
         started = time.perf_counter()
         collected: list[str] = []
+        reasoning: list[str] = []
         usage = Usage()
         finish_reason = "stop"
 
@@ -232,6 +237,8 @@ class Orchestrator:
             async for chunk in self._provider.stream(messages, params):
                 if chunk.delta:
                     collected.append(chunk.delta)
+                if chunk.reasoning_delta:
+                    reasoning.append(chunk.reasoning_delta)
                 if chunk.done:
                     finish_reason = chunk.finish_reason or "stop"
                     if chunk.usage is not None:
@@ -241,18 +248,34 @@ class Orchestrator:
             # Client disconnected. Keep what was already generated: the user
             # may have read it, so it is part of the conversation.
             await self._persist_assistant(
-                session.id, "".join(collected), usage, "cancelled", started
+                session.id,
+                "".join(collected),
+                usage,
+                "cancelled",
+                started,
+                reasoning="".join(reasoning),
             )
             raise
         except Exception as exc:
             await self._persist_assistant(
-                session.id, "".join(collected), usage, "error", started, error=str(exc)
+                session.id,
+                "".join(collected),
+                usage,
+                "error",
+                started,
+                error=str(exc),
+                reasoning="".join(reasoning),
             )
             await self._record_failure(session.id, exc)
             raise
         else:
             await self._persist_assistant(
-                session.id, "".join(collected), usage, finish_reason, started
+                session.id,
+                "".join(collected),
+                usage,
+                finish_reason,
+                started,
+                reasoning="".join(reasoning),
             )
 
     async def _persist_assistant(
@@ -263,6 +286,7 @@ class Orchestrator:
         finish_reason: str,
         started: float,
         error: str | None = None,
+        reasoning: str = "",
     ) -> None:
         latency_ms = int((time.perf_counter() - started) * 1000)
         info = self._provider.info()
@@ -278,6 +302,7 @@ class Orchestrator:
                 latency_ms=latency_ms,
                 finish_reason=finish_reason,
                 error=error,
+                metadata={"reasoning": reasoning} if reasoning else {},
             )
         )
         if error is None:

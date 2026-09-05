@@ -41,7 +41,10 @@ def load_or_create_token(token_file: Path, configured: str = "") -> str:
         return configured
 
     if token_file.is_file():
-        token = token_file.read_text(encoding="utf-8").strip()
+        # utf-8-sig tolerates a BOM, which any editor or PowerShell script that
+        # touches this file may add. A BOM inside a bearer token is a 401 that
+        # looks like a wrong password.
+        token = token_file.read_text(encoding="utf-8-sig").strip()
         if token:
             _warn_if_world_readable(token_file)
             return token
