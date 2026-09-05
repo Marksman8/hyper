@@ -92,7 +92,8 @@ tools:
   # Directories AURA may read or write. Deliberately empty by default: an
   # unconfigured assistant should be able to touch nothing, not everything.
   # Add your project directories here.
-  workspace_roots: []
+  workspace_roots:
+    - "C:/Users/ajsal/Downloads/Aura-Hyper"
   # Extra refusals inside those roots. Empty uses the built-in list, which
   # already covers .env, var/secrets, *.pem, id_rsa and .ssh.
   deny_patterns: []
