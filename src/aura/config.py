@@ -250,7 +250,19 @@ class VoiceConfig(_Section):
     #   min_rms: require real loudness, since speaker bleed is much quieter
     #            than a person addressing the machine
     barge_in_grace_s: float = Field(default=1.0, ge=0.0, le=10.0)
-    barge_in_min_rms: float = Field(default=0.02, ge=0.0, le=1.0)
+    # Measured on a laptop with speakers: AURA's own voice reaches the mic
+    # array at RMS 0.024 to 0.040. An earlier default of 0.02 sat *below* that
+    # floor, so every barge-in was the assistant hearing itself -- it then
+    # transcribed its own reply, asked the model about it, and answered again,
+    # in a loop that never terminated.
+    #
+    # Speaker coupling varies enormously between machines, so this default is
+    # a starting point rather than a truth. `aura calibrate` measures it.
+    barge_in_min_rms: float = Field(default=0.10, ge=0.0, le=1.0)
+    # A feedback loop must be impossible by construction, not merely unlikely.
+    # This many barge-ins in a row with no wake word between them means AURA is
+    # talking to itself; barge-in is then disabled for the session.
+    max_consecutive_barge_ins: int = Field(default=3, ge=1, le=20)
     # Unload STT after this long idle. On a 16 GB machine this is not an
     # optimisation, it is what lets AURA coexist with a browser.
     idle_unload_s: float = Field(default=180.0, ge=0.0)

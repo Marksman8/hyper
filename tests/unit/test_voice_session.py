@@ -516,3 +516,64 @@ def test_follow_up_can_be_disabled(rig: Any) -> None:
     finally:
         session.stop()
         thread.join(timeout=3)
+
+
+# -- feedback loop -----------------------------------------------------------
+# Observed live: with barge_in_min_rms below the echo floor, AURA interrupted
+# itself, transcribed its own reply, answered the result, and repeated - a loop
+# that ran until the process was killed. The threshold was the cause; this is
+# the guard that makes the failure terminate regardless of the threshold.
+
+
+def test_repeated_barge_ins_disable_barge_in(rig: Any) -> None:
+    session = rig["session"]
+    limit = session._cfg.max_consecutive_barge_ins
+
+    for _ in range(limit):
+        session._speaking_since = time.monotonic() - 10.0
+        session._interrupt.clear()
+        session._set_state(VoiceState.SPEAKING)
+        for _ in range(30):
+            session._check_barge_in(speech_frame())
+
+    assert session._barge_disabled, f"barge-in still armed after {limit} consecutive interruptions"
+
+    # And it stays quiet from here, so the loop cannot resume.
+    stops_before = rig["speaker"].stop_calls
+    session._speaking_since = time.monotonic() - 10.0
+    session._interrupt.clear()
+    session._set_state(VoiceState.SPEAKING)
+    for _ in range(30):
+        session._check_barge_in(speech_frame())
+    assert rig["speaker"].stop_calls == stops_before
+
+
+def test_wake_word_clears_the_barge_in_streak(rig: Any) -> None:
+    """A person saying the wake word is evidence this is not a runaway loop."""
+    session, mic, wake = rig["session"], rig["mic"], rig["wake"]
+    session._barge_streak = session._cfg.max_consecutive_barge_ins - 1
+
+    thread = run_session(session)
+    try:
+        wake.trigger()
+        mic.feed(silent_frame())
+        assert wait_for(lambda: session.state is VoiceState.LISTENING)
+        assert session._barge_streak == 0
+    finally:
+        session.stop()
+        thread.join(timeout=3)
+
+
+def test_echo_below_the_threshold_never_interrupts(rig: Any) -> None:
+    """The measured echo floor on real hardware was RMS 0.024 to 0.040."""
+    session = rig["session"]
+    session._cfg = session._cfg.model_copy(update={"barge_in_min_rms": 0.10})
+    session._speaking_since = time.monotonic() - 10.0
+    session._set_state(VoiceState.SPEAKING)
+
+    echo = np.full(FRAME, 0.040, dtype=np.float32)  # loudest observed echo
+    for _ in range(50):
+        session._check_barge_in(echo)
+
+    assert rig["speaker"].stop_calls == 0
+    assert session._barge_streak == 0

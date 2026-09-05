@@ -135,6 +135,12 @@ class VoiceSession:
         self._collector: Any = None
         # Whether the turn that just ended was cut off by the user speaking.
         self._interrupted = False
+        # Consecutive barge-ins with no wake word in between. A microphone that
+        # can hear the speakers turns barge-in into a feedback loop: AURA
+        # interrupts itself, transcribes its own voice, answers the result, and
+        # repeats. Counting is what makes that terminate.
+        self._barge_streak = 0
+        self._barge_disabled = False
         # Whether the turn that just ended earns a follow-up window. A turn
         # that errored or heard nothing does not: reopening the microphone
         # after a failure invites a second failure.
@@ -202,6 +208,9 @@ class VoiceSession:
                         # Cue first, before anything that could take time. This
                         # is the user's only confirmation that AURA woke up.
                         self._play_cue(wake_cue)
+                        # A person said the wake word, so whatever barge-ins
+                        # came before were not a runaway loop.
+                        self._barge_streak = 0
                         self._on_text("system", "listening")
                         self._collector = self._endpointer.begin(preroll=self._ring.read())
                         self._set_state(VoiceState.LISTENING)
@@ -298,7 +307,11 @@ class VoiceSession:
         Headphones remove the problem entirely, which is worth saying out loud
         rather than pretending the heuristics are a solution.
         """
-        if not self._cfg.barge_in_enabled or self._state is not VoiceState.SPEAKING:
+        if (
+            not self._cfg.barge_in_enabled
+            or self._barge_disabled
+            or self._state is not VoiceState.SPEAKING
+        ):
             return
         if self._interrupt.is_set():
             # Already interrupted; the worker is winding down. Re-firing here
@@ -319,7 +332,27 @@ class VoiceSession:
             return
 
         if self._barge.process(frame):
-            log.info("voice.barge_in", rms=round(rms, 4))
+            self._barge_streak += 1
+            log.info("voice.barge_in", rms=round(rms, 4), streak=self._barge_streak)
+
+            if self._barge_streak >= self._cfg.max_consecutive_barge_ins:
+                # Nobody interrupts three answers in a row without ever saying
+                # the wake word. This is the microphone hearing the speakers.
+                self._barge_disabled = True
+                log.warning(
+                    "voice.barge_in_feedback_loop",
+                    streak=self._barge_streak,
+                    rms=round(rms, 4),
+                    threshold=self._cfg.barge_in_min_rms,
+                    hint=(
+                        "AURA is hearing itself. Barge-in is off for this "
+                        "session. Run `aura calibrate`, raise "
+                        "voice.barge_in_min_rms, or use headphones."
+                    ),
+                )
+                self._on_text("system", "barge-in disabled: hearing myself")
+                return
+
             self._on_text("system", "interrupted")
             self._interrupted = True
             self._interrupt.set()

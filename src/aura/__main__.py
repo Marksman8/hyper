@@ -311,6 +311,110 @@ def devices() -> None:
 
 
 @app.command()
+def calibrate() -> None:
+    """Measure this machine's speaker-to-microphone bleed.
+
+    Barge-in has to tell "the user is talking" from "the microphone can hear
+    the speakers". Those differ only in loudness, and the gap between them
+    depends on the laptop, the speaker volume and where you sit -- so a
+    hard-coded threshold is a guess that is wrong on most machines.
+
+    A default that sat *below* the echo floor once made AURA interrupt itself,
+    transcribe its own reply, answer it, and repeat. This measures both levels
+    instead of guessing.
+    """
+    import time as _time
+
+    import numpy as np
+
+    from aura.voice.audio.capture import Microphone
+    from aura.voice.audio.playback import Speaker
+    from aura.voice.factory import build_tts
+
+    cfg = get_settings()
+    configure_logging(level="WARNING", fmt=cfg.logging.format)
+
+    def rms_of(frames: list[Any]) -> list[float]:
+        return [float(np.sqrt(np.mean(np.square(f)))) for f in frames if len(f)]
+
+    console.print("[bold]AURA[/bold] barge-in calibration\n")
+
+    tts = build_tts(cfg)
+    tts.load()
+    speaker = Speaker(device=cfg.voice.output_device or None)
+    mic = Microphone(device=cfg.voice.input_device or None)
+
+    # --- 1. echo floor: how loud AURA sounds to its own microphone ---------
+    console.print("[cyan]1/2[/cyan] Measuring echo. [bold]Stay quiet[/bold] while AURA speaks.")
+    line = (
+        "I am measuring how loudly my own voice reaches the microphone. "
+        "Please stay quiet until I finish speaking."
+    )
+    echo_frames: list[Any] = []
+    with mic:
+        _time.sleep(0.3)
+        for chunk in tts.synthesize(line):
+            speaker.play(chunk)
+        deadline = _time.monotonic() + 12.0
+        while (speaker.is_playing or not echo_frames) and _time.monotonic() < deadline:
+            frame = mic.read(timeout=0.3)
+            if frame is not None:
+                echo_frames.append(frame)
+        speaker.wait_until_idle(timeout=3)
+    speaker.close()
+
+    echo = rms_of(echo_frames)
+    if not echo:
+        console.print("[red]No audio captured. Check the microphone.[/red]")
+        raise typer.Exit(1)
+    echo_sorted = sorted(echo)
+    echo_p95 = echo_sorted[int(len(echo_sorted) * 0.95) - 1]
+    echo_max = echo_sorted[-1]
+
+    # --- 2. speech level: how loud you are ---------------------------------
+    console.print("\n[cyan]2/2[/cyan] Now [bold]talk normally[/bold] for about five seconds.")
+    console.print("[dim]Say anything - count to ten at your usual volume.[/dim]")
+    speech_frames: list[Any] = []
+    with mic:
+        deadline = _time.monotonic() + 5.5
+        while _time.monotonic() < deadline:
+            frame = mic.read(timeout=0.3)
+            if frame is not None:
+                speech_frames.append(frame)
+
+    speech = sorted(rms_of(speech_frames))
+    if not speech:
+        console.print("[red]No audio captured.[/red]")
+        raise typer.Exit(1)
+    # The loudest quarter: the parts where you were actually speaking rather
+    # than pausing between words.
+    loud = speech[int(len(speech) * 0.75) :]
+    speech_typical = sum(loud) / len(loud)
+
+    # --- 3. verdict --------------------------------------------------------
+    console.print("\n[bold]Measured[/bold]")
+    console.print(f"  echo from speakers   p95 {echo_p95:.4f}   max {echo_max:.4f}")
+    console.print(f"  your speech          typical {speech_typical:.4f}")
+
+    if speech_typical <= echo_max * 1.5:
+        console.print(
+            "\n[yellow]Your voice is not clearly louder than the echo.[/yellow]\n"
+            "  No threshold can separate them reliably. Either use headphones, "
+            "lower the speaker volume, or set voice.barge_in_enabled: false."
+        )
+        raise typer.Exit(1)
+
+    # Midway between the two, in log space, so it sits well clear of both.
+    recommended = round((echo_max * speech_typical) ** 0.5, 3)
+    console.print(f"\n[bold green]Recommended[/bold green]  barge_in_min_rms: {recommended}")
+    console.print(f"[dim]currently {cfg.voice.barge_in_min_rms}[/dim]")
+    console.print(
+        "\nSet it in [bold]config/default.yaml[/bold] under voice:, "
+        "or export AURA__VOICE__BARGE_IN_MIN_RMS=" + str(recommended)
+    )
+
+
+@app.command()
 def doctor() -> None:
     """Check that this machine can run AURA, and say what is missing."""
     from aura.runtime.resources import snapshot
