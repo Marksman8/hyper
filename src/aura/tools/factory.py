@@ -11,6 +11,7 @@ from aura.config import Settings
 from aura.logging import get_logger
 from aura.security.audit import AuditLog
 from aura.security.permissions import PermissionLevel, PermissionPolicy
+from aura.tools.applications import application_tools
 from aura.tools.executor import ToolExecutor
 from aura.tools.filesystem import filesystem_tools
 from aura.tools.python_exec import python_tools
@@ -23,6 +24,9 @@ log = get_logger(__name__)
 def build_registry(settings: Settings) -> ToolRegistry:
     registry = ToolRegistry()
     registry.register_all(filesystem_tools())
+    # Windows only; returns nothing elsewhere, so the model is never offered a
+    # tool that cannot work on this machine.
+    registry.register_all(application_tools())
     if settings.tools.python_enabled:
         registry.register_all(python_tools())
     log.info("tools.registry_built", tools=registry.names())

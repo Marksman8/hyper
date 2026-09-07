@@ -114,6 +114,27 @@ def do_task(
 
 
 @app.command()
+def desktop() -> None:
+    """Run the desktop shell: tray icon, status overlay, approval prompts.
+
+    A client of AURA Core like any other. Start `aura serve` first.
+    """
+    from aura.desktop.app import DesktopApp
+
+    cfg = get_settings()
+    configure_logging(
+        level=cfg.logging.level,
+        fmt=cfg.logging.format,
+        log_file=cfg.logging.resolved_file(),
+        redact_keys=tuple(cfg.logging.redact_keys),
+    )
+    console.print(
+        "[dim]AURA desktop shell. Close the overlay to hide it; quit from the tray.[/dim]"
+    )
+    DesktopApp().run()
+
+
+@app.command()
 def status() -> None:
     """Print AURA Core status."""
     from aura.clients.cli import run_status

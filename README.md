@@ -12,6 +12,7 @@ model underneath is a configuration value, not a code dependency.
 > Phase 3 (tools): filesystem and Python behind permission levels 0–4.
 > Phase 4 (agent): the model picks its own tools and loops until it can answer,
 > under a step budget it does not control.
+> v0.1.1 (desktop): tray icon, status overlay, and approval prompts.
 > No vision yet — see [the roadmap](docs/ROADMAP.md) and
 > [known issues](docs/KNOWN-ISSUES.md).
 
@@ -88,6 +89,7 @@ uv run aura chat            # interactive conversation
 uv run aura chat "hello"    # one shot
 uv run aura do "..."        # give it a task; it picks its own tools
 uv run aura status          # health, model, RAM/VRAM
+uv run aura desktop         # tray icon + status overlay + approval prompts
 ```
 
 With voice installed:
@@ -133,6 +135,7 @@ drive your GPU on 127.0.0.1:8081.
 | `GET` | `/v1/audit` | why AURA did what it did |
 | `GET` | `/v1/tools` | what AURA can do, and what needs approval |
 | `POST` | `/v1/tools/{name}` | run one tool (`confirmed: true` for level 2+) |
+| `POST` | `/v1/agent` | let the model pick tools and loop until it can answer |
 
 Interactive docs at <http://127.0.0.1:8760/docs>.
 
@@ -172,7 +175,9 @@ src/aura/
   security/    permission levels, tokens, audit policy
   runtime/     resource sampling, process supervision
   voice/       wake word, VAD, STT, TTS, session loop (Phase 2)
-  clients/     reference CLI client
+  tools/       filesystem, Python, app launcher, permission gate (Phase 3)
+  desktop/     tray, overlay, approval dialog (v0.1.1)
+  clients/     reference CLI clients
 config/        default.yaml, models.yaml
 docs/          architecture and decision records
 scripts/       model download, llama.cpp setup, server launch

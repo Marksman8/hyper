@@ -40,6 +40,13 @@ voice = [
     "piper-tts>=1.2",         # TTS, ONNX
 ]
 
+# v0.1.1. tkinter is stdlib, so the window itself costs nothing; these are only
+# for the system tray icon. `uv sync --extra desktop`.
+desktop = [
+    "pystray>=0.19",
+    "pillow>=11.0",
+]
+
 [project.scripts]
 aura = "aura.__main__:app"
 
@@ -97,6 +104,9 @@ packages = ["aura"]
 [[tool.mypy.overrides]]
 module = [
     "psutil.*",
+    # Neither ships type information.
+    "pystray.*",
+    "PIL.*",
     # Speech backends ship no py.typed marker. Confined to the provider
     # packages, which are the only modules allowed to import them anyway.
     "sounddevice.*",
