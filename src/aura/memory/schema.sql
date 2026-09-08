@@ -88,3 +88,67 @@ CREATE TABLE IF NOT EXISTS audit (
 
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_request ON audit(request_id);
+
+-- ---------------------------------------------------------------------------
+-- Schema version 3 (Phase 6): why AURA believes what it believes.
+-- ---------------------------------------------------------------------------
+
+-- The justification behind each fact.
+--
+-- `facts.evidence_count` is a counter, and a counter is not a justification:
+-- "confidence 0.8, evidence 4" tells the user nothing they can check,
+-- disagree with, or correct, and gives no way to trace a wrong belief back to
+-- the conversation that produced it. Phase 6's exit criterion is that AURA can
+-- say *why*, so the actual utterance is stored.
+--
+-- ON DELETE CASCADE matters here: deleting a fact must leave nothing behind
+-- that could re-derive it (spec section 23).
+CREATE TABLE IF NOT EXISTS fact_evidence (
+    id         TEXT PRIMARY KEY,
+    fact_id    TEXT NOT NULL REFERENCES facts(id) ON DELETE CASCADE,
+    -- What the user actually said. Quoted back verbatim when explaining.
+    quote      TEXT NOT NULL,
+    -- Where it came from, so the user can go and look.
+    session_id TEXT,
+    turn_id    TEXT,
+    -- 'explicit' (the user said "remember that") or 'inferred'.
+    source     TEXT NOT NULL DEFAULT 'inferred'
+               CHECK (source IN ('explicit', 'inferred')),
+    created_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fact_evidence_fact
+    ON fact_evidence(fact_id, created_at DESC);
+
+-- Full-text search over conversation history.
+--
+-- FTS5, not embeddings. See docs/architecture/05-phase6-memory.md section 2:
+-- BM25 costs zero dependencies and zero VRAM, whereas embeddings done properly
+-- need a second model resident beside the LLM. External-content table, so the
+-- text is not stored twice; `turns` remains the single source of truth.
+CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5(
+    content,
+    session_id UNINDEXED,
+    content='turns',
+    content_rowid='rowid'
+);
+
+-- Triggers keep the index in step with the table. Without these the index
+-- silently drifts, which is worse than having no search at all: it answers,
+-- but from a stale view of the conversation.
+CREATE TRIGGER IF NOT EXISTS turns_fts_insert AFTER INSERT ON turns BEGIN
+    INSERT INTO turns_fts(rowid, content, session_id)
+    VALUES (new.rowid, new.content, new.session_id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS turns_fts_delete AFTER DELETE ON turns BEGIN
+    INSERT INTO turns_fts(turns_fts, rowid, content, session_id)
+    VALUES ('delete', old.rowid, old.content, old.session_id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS turns_fts_update AFTER UPDATE ON turns BEGIN
+    INSERT INTO turns_fts(turns_fts, rowid, content, session_id)
+    VALUES ('delete', old.rowid, old.content, old.session_id);
+    INSERT INTO turns_fts(rowid, content, session_id)
+    VALUES (new.rowid, new.content, new.session_id);
+END;

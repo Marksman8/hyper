@@ -16,19 +16,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from aura.core.types import Fact, Permanence, Role, Session, Turn
+from aura.core.types import Evidence, Fact, Permanence, Role, Session, Turn, TurnMatch
 from aura.errors import NotFoundError, StorageError
 from aura.logging import get_logger
+from aura.memory.beliefs import assess
 
 log = get_logger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
@@ -81,6 +83,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 """
             )
 
+    if current < 3:
+        # v3 added fact_evidence and the FTS5 index over turns. The tables
+        # themselves are created by schema.sql on every connect, but an index
+        # created over an existing table starts EMPTY -- the triggers only see
+        # rows written from now on. A search that silently cannot find anything
+        # said before today is worse than no search, so rebuild it once.
+        log.info("memory.migrating", from_version=current, to_version=3)
+        conn.execute("INSERT INTO turns_fts(turns_fts) VALUES('rebuild')")
+
 
 def _loads(raw: str | None) -> dict[str, Any]:
     if not raw:
@@ -90,6 +101,57 @@ def _loads(raw: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _row_to_turn(r: sqlite3.Row) -> Turn:
+    return Turn(
+        id=r["id"],
+        session_id=r["session_id"],
+        role=Role(r["role"]),
+        content=r["content"],
+        created_at=r["created_at"],
+        model=r["model"],
+        provider=r["provider"],
+        prompt_tokens=r["prompt_tokens"],
+        completion_tokens=r["completion_tokens"],
+        latency_ms=r["latency_ms"],
+        finish_reason=r["finish_reason"],
+        error=r["error"],
+        metadata=_loads(r["metadata_json"]),
+    )
+
+
+def _row_to_fact(r: sqlite3.Row) -> Fact:
+    return Fact(
+        id=r["id"],
+        scope=r["scope"],
+        key=r["key"],
+        value=r["value"],
+        confidence=r["confidence"],
+        evidence_count=r["evidence_count"],
+        source=r["source"],
+        permanence=Permanence(r["permanence"]),
+        created_at=r["created_at"],
+        last_confirmed_at=r["last_confirmed_at"],
+    )
+
+
+# FTS5 reads its own query syntax: quotes, NEAR, AND/OR, column filters and a
+# trailing `*`. A user asking `what about "stop"?` would be a syntax error, and
+# worse, a question containing a colon could address a column they did not
+# know existed. So the query is reduced to bare words and rebuilt.
+_FTS_WORD = re.compile(r"[0-9A-Za-z_]+", re.UNICODE)
+
+
+def _fts_query(raw: str) -> str:
+    """Turn a natural-language question into a safe FTS5 MATCH expression."""
+    words = _FTS_WORD.findall(raw or "")
+    if not words:
+        return ""
+    # Quoted terms are literals to FTS5, so nothing in them can be an operator.
+    # OR rather than AND: a question phrased in a sentence should still find
+    # turns that match most of it, and bm25 ranks the best overlap first.
+    return " OR ".join('"' + w + '"' for w in words[:24])
 
 
 class MemoryStore:
@@ -267,24 +329,7 @@ class MemoryStore:
             return cur.fetchall()
 
         rows = await self._run(_read)
-        return [
-            Turn(
-                id=r["id"],
-                session_id=r["session_id"],
-                role=Role(r["role"]),
-                content=r["content"],
-                created_at=r["created_at"],
-                model=r["model"],
-                provider=r["provider"],
-                prompt_tokens=r["prompt_tokens"],
-                completion_tokens=r["completion_tokens"],
-                latency_ms=r["latency_ms"],
-                finish_reason=r["finish_reason"],
-                error=r["error"],
-                metadata=_loads(r["metadata_json"]),
-            )
-            for r in rows
-        ]
+        return [_row_to_turn(r) for r in rows]
 
     # -- facts ---------------------------------------------------------------
 
@@ -321,8 +366,24 @@ class MemoryStore:
             )
 
         await self._run(_write)
+        # Read back rather than returning the argument. On conflict the stored
+        # row keeps its ORIGINAL id, so the caller's `fact.id` is not the id in
+        # the database -- and evidence rows reference that id by foreign key.
+        # Returning the argument here would hand out a dangling reference.
+        stored = await self.get_fact(fact.scope, fact.key)
         log.info("memory.fact_upserted", scope=fact.scope, key=fact.key)
-        return fact
+        return stored or fact
+
+    async def get_fact(self, scope: str, key: str) -> Fact | None:
+        def _read() -> sqlite3.Row | None:
+            cur = self._db.execute(
+                "SELECT * FROM facts WHERE scope = ? AND key = ?", (scope, key)
+            )
+            row: sqlite3.Row | None = cur.fetchone()
+            return row
+
+        row = await self._run(_read)
+        return _row_to_fact(row) if row else None
 
     async def list_facts(self, scope: str | None = None) -> list[Fact]:
         def _read() -> list[sqlite3.Row]:
@@ -336,21 +397,7 @@ class MemoryStore:
             return cur.fetchall()
 
         rows = await self._run(_read)
-        return [
-            Fact(
-                id=r["id"],
-                scope=r["scope"],
-                key=r["key"],
-                value=r["value"],
-                confidence=r["confidence"],
-                evidence_count=r["evidence_count"],
-                source=r["source"],
-                permanence=Permanence(r["permanence"]),
-                created_at=r["created_at"],
-                last_confirmed_at=r["last_confirmed_at"],
-            )
-            for r in rows
-        ]
+        return [_row_to_fact(r) for r in rows]
 
     async def delete_fact(self, scope: str, key: str) -> bool:
         def _write() -> int:
@@ -381,6 +428,131 @@ class MemoryStore:
         if n:
             log.info("memory.facts_expired", count=n)
         return n
+
+    # -- evidence (Phase 6) ---------------------------------------------------
+
+    async def add_evidence(self, evidence: Evidence) -> Evidence:
+        """Record one reason for believing a fact, then re-derive confidence.
+
+        Confidence is not incremented here; it is *recomputed* from all the
+        evidence. That is what makes it explainable, and it means removing a
+        piece of evidence lowers the belief instead of leaving a number that
+        nothing supports.
+        """
+
+        def _write() -> None:
+            self._db.execute(
+                "INSERT INTO fact_evidence(id, fact_id, quote, session_id, turn_id, "
+                "source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    evidence.id,
+                    evidence.fact_id,
+                    evidence.quote,
+                    evidence.session_id,
+                    evidence.turn_id,
+                    evidence.source,
+                    evidence.created_at,
+                ),
+            )
+
+        await self._run(_write)
+        await self.reassess_fact(evidence.fact_id)
+        return evidence
+
+    async def evidence_for(self, fact_id: str, limit: int = 20) -> list[Evidence]:
+        def _read() -> list[sqlite3.Row]:
+            cur = self._db.execute(
+                "SELECT * FROM fact_evidence WHERE fact_id = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (fact_id, limit),
+            )
+            return cur.fetchall()
+
+        rows = await self._run(_read)
+        return [
+            Evidence(
+                id=r["id"],
+                fact_id=r["fact_id"],
+                quote=r["quote"],
+                session_id=r["session_id"],
+                turn_id=r["turn_id"],
+                source=r["source"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    async def reassess_fact(self, fact_id: str) -> float:
+        """Recompute one fact's confidence from its evidence."""
+        evidence = await self.evidence_for(fact_id, limit=1000)
+        if not evidence:
+            return 0.0
+        belief = assess(evidence)
+
+        def _write() -> None:
+            self._db.execute(
+                "UPDATE facts SET confidence = ?, evidence_count = ?, "
+                "last_confirmed_at = ? WHERE id = ?",
+                (
+                    belief.confidence,
+                    belief.independent_count,
+                    max(e.created_at for e in evidence),
+                    fact_id,
+                ),
+            )
+
+        await self._run(_write)
+        log.info(
+            "memory.fact_reassessed",
+            fact_id=fact_id,
+            confidence=belief.confidence,
+            independent=belief.independent_count,
+        )
+        return belief.confidence
+
+    # -- search (Phase 6) -----------------------------------------------------
+
+    async def search_turns(
+        self, query: str, limit: int = 8, session_id: str | None = None
+    ) -> list[TurnMatch]:
+        """BM25 search over conversation history.
+
+        Returns [] for an empty or unparseable query rather than raising: FTS5
+        MATCH treats bare punctuation as a syntax error, and a user's question
+        must never become a 500.
+        """
+        cleaned = _fts_query(query)
+        if not cleaned:
+            return []
+
+        def _read() -> list[sqlite3.Row]:
+            sql = (
+                "SELECT t.*, bm25(turns_fts) AS score FROM turns_fts "
+                "JOIN turns t ON t.rowid = turns_fts.rowid "
+                "WHERE turns_fts MATCH ? "
+            )
+            params: list[Any] = [cleaned]
+            if session_id:
+                sql += "AND t.session_id = ? "
+                params.append(session_id)
+            # bm25() is negative, most relevant first when ascending.
+            sql += "ORDER BY score LIMIT ?"
+            params.append(limit)
+            try:
+                return self._db.execute(sql, params).fetchall()
+            except sqlite3.OperationalError as exc:
+                log.warning("memory.search_failed", query=cleaned, error=str(exc))
+                return []
+
+        rows = await self._run(_read)
+        return [
+            TurnMatch(
+                turn=_row_to_turn(r),
+                score=float(r["score"]),
+                session_id=r["session_id"],
+            )
+            for r in rows
+        ]
 
     # -- audit ---------------------------------------------------------------
 

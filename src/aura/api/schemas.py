@@ -136,6 +136,34 @@ class FactOut(BaseModel):
     last_confirmed_at: float
 
 
+class EvidenceOut(BaseModel):
+    """One reason a fact is believed. The point of Phase 6: a justification
+    the user can read, disagree with, and act on."""
+
+    quote: str
+    source: str
+    session_id: str | None
+    turn_id: str | None
+    created_at: float
+
+
+class FactExplanation(BaseModel):
+    fact: FactOut
+    # A sentence a person can check, e.g. "Inferred from 2 separate occasions."
+    reason: str
+    believed: bool
+    evidence: list[EvidenceOut]
+
+
+class TurnMatchOut(BaseModel):
+    session_id: str
+    turn_id: str
+    role: str
+    content: str
+    created_at: float
+    score: float
+
+
 class ProviderStatus(BaseModel):
     name: str
     kind: str

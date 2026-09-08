@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -27,6 +28,7 @@ from aura.config import Settings
 from aura.core.agent import AgentLoop, AgentOutcome
 from aura.core.types import (
     ChatChunk,
+    Evidence,
     Fact,
     GenerationParams,
     Message,
@@ -37,7 +39,7 @@ from aura.core.types import (
     Usage,
 )
 from aura.errors import EmergencyStopError
-from aura.logging import bind_session_id, get_logger
+from aura.logging import bind_session_id, current_session_id, get_logger
 from aura.memory.store import MemoryStore, build_history
 from aura.models.base import LLMProvider
 from aura.security.audit import AuditLog
@@ -81,6 +83,14 @@ class Orchestrator:
         # Runtime-flippable, distinct from the config default, so the emergency
         # stop can be engaged without restarting AURA.
         self._estop = settings.app.emergency_stop
+        # Phase 6. Built lazily so a provider that cannot chat never blocks boot.
+        self._extractor: Any = None
+        if settings.memory.learn_from_conversation:
+            from aura.memory.extraction import FactExtractor
+
+            self._extractor = FactExtractor(provider, store)
+        self._learning: set[asyncio.Task[None]] = set()
+        self._last_user_turn_id: str | None = None
 
     @property
     def provider(self) -> LLMProvider:
@@ -126,7 +136,8 @@ class Orchestrator:
         relevant = [
             f
             for f in facts
-            if f.confidence >= 0.5 and f.permanence.value in ("long_term", "permanent")
+            if f.confidence >= self._settings.memory.injection_floor
+            and f.permanence.value in ("long_term", "permanent")
         ]
         if relevant:
             lines = ["What you know about this user:"]
@@ -166,9 +177,52 @@ class Orchestrator:
         session = await self._store.ensure_session(session_id)
         bind_session_id(session.id)
 
-        await self._store.add_turn(Turn(session_id=session.id, role=Role.USER, content=user_text))
+        turn = await self._store.add_turn(
+            Turn(session_id=session.id, role=Role.USER, content=user_text)
+        )
+        # Remembered so extraction can cite the exact turn a belief came from.
+        # Evidence that cannot point at a turn cannot be deduplicated, and
+        # section 16's "separate occasions" rule depends on that.
+        self._last_user_turn_id = turn.id
         messages = await self._assemble(session.id, spoken=spoken, with_tools=with_tools)
         return session, messages
+
+    # -- learning (Phase 6) ---------------------------------------------------
+
+    def _learn_later(self, session_id: str, user_text: str, assistant_text: str) -> None:
+        """Schedule fact extraction without making the user wait for it.
+
+        Extraction is a second LLM call. Awaiting it here would add its latency
+        to every reply to power something the user cannot see happen, which is
+        a bad trade -- so it runs as a background task.
+
+        The task is held in a set because asyncio keeps only a weak reference:
+        an unreferenced task can be garbage-collected mid-flight, which shows up
+        as learning that works until the machine is busy.
+        """
+        if self._extractor is None or not self._settings.memory.learn_from_conversation:
+            return
+        if not user_text.strip() or not assistant_text.strip():
+            return
+
+        turn_id = self._last_user_turn_id
+
+        async def _run() -> None:
+            try:
+                await self._extractor.learn(
+                    user_text, assistant_text, session_id=session_id, turn_id=turn_id
+                )
+            except Exception as exc:
+                log.warning("memory.learn_task_failed", error=str(exc))
+
+        task = asyncio.create_task(_run())
+        self._learning.add(task)
+        task.add_done_callback(self._learning.discard)
+
+    async def drain_learning(self) -> None:
+        """Wait for outstanding extraction. For shutdown and for tests."""
+        while self._learning:
+            await asyncio.gather(*tuple(self._learning), return_exceptions=True)
 
     async def chat(
         self,
@@ -205,6 +259,7 @@ class Orchestrator:
                 metadata={"reasoning": result.reasoning} if result.reasoning else {},
             )
         )
+        self._learn_later(session.id, user_text, result.content)
         await self._audit.record(
             actor="user",
             action="chat",
@@ -410,6 +465,10 @@ class Orchestrator:
                 started,
                 reasoning="".join(reasoning),
             )
+            # Only on the success path. A cancelled or failed generation is a
+            # half-finished exchange, and inferring durable preferences from
+            # one would be learning from something that did not happen.
+            self._learn_later(session.id, user_text, "".join(collected))
 
     async def _persist_assistant(
         self,
@@ -476,11 +535,31 @@ class Orchestrator:
             source="explicit",
             permanence=Permanence(permanence),
         )
-        await self._store.upsert_fact(fact)
+        stored = await self._store.upsert_fact(fact)
+        # Explicit evidence, not just a fact row. Without this the most common
+        # case -- the user saying "remember that ..." -- would have nothing to
+        # show under `aura memory why`, and confidence would be a number with
+        # no justification behind it. "You told AURA this directly" is a
+        # perfectly good reason; it just has to be recorded as one.
+        await self._store.add_evidence(
+            Evidence(
+                fact_id=stored.id,
+                quote=value,
+                session_id=current_session_id(),
+                # A distinct turn id per statement, so saying it again on
+                # another occasion counts as separate corroboration rather
+                # than collapsing into one.
+                turn_id=self._last_user_turn_id or f"remember:{uuid.uuid4().hex[:12]}",
+                source="explicit",
+            )
+        )
         await self._audit.record(
             actor="user", action="memory.remember", target=key, detail={"value": value}
         )
-        return fact
+        # Re-read: adding evidence re-derives confidence, so the object built
+        # before that call is already stale. Returning it would have the API
+        # report 1.0 for a fact stored at 0.95.
+        return await self._store.get_fact("user", key) or stored
 
     async def forget(self, key: str) -> bool:
         deleted = await self._store.delete_fact("user", key)

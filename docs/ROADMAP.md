@@ -153,6 +153,29 @@ confidence and needs repeated evidence; only explicit statements start high.
 **Exit criteria**: `aura memory` shows why each fact is believed; a stated
 preference measurably changes behaviour; deletion is complete and immediate.
 
+**Status: done**, with one deliberate departure from the plan above.
+
+**Embeddings and `sqlite-vec` were not built.** For facts, retrieval is the
+wrong tool: at one-user scale every fact fits in the prompt, and loading all of
+them beats top-k outright -- no recall misses, no threshold to tune. For
+conversation history search is genuinely needed, but SQLite's FTS5 is already
+compiled in, costs zero dependencies and zero VRAM, while embeddings done
+properly need a second model resident beside the LLM on the same 8 GB card.
+FTS5 loses on synonym queries; that is the trigger to revisit, and search sits
+behind a seam so it is a swap rather than a rewrite. See
+`docs/architecture/05-phase6-memory.md` section 2.
+
+The central change instead was **evidence**. `evidence_count INTEGER` could not
+satisfy "shows why": a counter is not a justification and cannot be traced back
+to the conversation that produced it. `fact_evidence` stores the actual words,
+and confidence is now *derived* from that evidence rather than incremented -- so
+removing evidence lowers the belief.
+
+Also built: extraction with §16's confidence rules (one remark never crosses
+the injection floor), a quote guard that drops any proposal the model cannot
+attribute to the user verbatim, a cheap pre-filter so most turns never spend a
+second generation, and `aura memory list/why/search/forget`.
+
 ---
 
 ## Phase 7 — Personalization

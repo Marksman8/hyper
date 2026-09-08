@@ -5,6 +5,7 @@ aura chat       interactive client against a running core
 aura status     one-shot status report
 aura doctor     check this machine can actually run AURA
 aura vision     control what AURA may look at
+aura memory     see and correct what AURA knows
 """
 
 from __future__ import annotations
@@ -133,6 +134,53 @@ def desktop() -> None:
         "[dim]AURA desktop shell. Close the overlay to hide it; quit from the tray.[/dim]"
     )
     DesktopApp().run()
+
+
+# -- memory ------------------------------------------------------------------
+#
+# The Phase 6 exit criterion: AURA must be able to say WHY it believes
+# something, in the user's own words. A confidence number is not an answer.
+
+memory_app = typer.Typer(
+    name="memory", help="See and correct what AURA knows about you.", no_args_is_help=True
+)
+app.add_typer(memory_app)
+
+
+@memory_app.command("list")
+def memory_list() -> None:
+    """Everything AURA has learned, and whether it acts on it."""
+    from aura.clients.memory_cli import run_list
+
+    cfg = get_settings()
+    asyncio.run(run_list(cfg.memory.injection_floor))
+
+
+@memory_app.command("why")
+def memory_why(key: str = typer.Argument(..., help="e.g. response_length")) -> None:
+    """Show the evidence behind one belief."""
+    from aura.clients.memory_cli import run_why
+
+    asyncio.run(run_why(key))
+
+
+@memory_app.command("search")
+def memory_search(
+    query: str = typer.Argument(..., help="Words to look for in past conversations."),
+    limit: int = typer.Option(8, "--limit", "-n"),
+) -> None:
+    """Search past conversations."""
+    from aura.clients.memory_cli import run_search
+
+    asyncio.run(run_search(query, limit))
+
+
+@memory_app.command("forget")
+def memory_forget(key: str = typer.Argument(..., help="The fact to delete.")) -> None:
+    """Delete a fact and every piece of evidence behind it."""
+    from aura.clients.memory_cli import run_forget
+
+    asyncio.run(run_forget(key))
 
 
 # -- vision ------------------------------------------------------------------

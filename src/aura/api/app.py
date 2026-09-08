@@ -25,6 +25,8 @@ from aura.api.schemas import (
     ChatRequest,
     ChatResponse,
     EStopRequest,
+    EvidenceOut,
+    FactExplanation,
     FactIn,
     FactOut,
     OpenAIChatRequest,
@@ -35,6 +37,7 @@ from aura.api.schemas import (
     ToolCallRequest,
     ToolCallResponse,
     ToolSpecOut,
+    TurnMatchOut,
     TurnOut,
     UsageOut,
     VisionAppRequest,
@@ -440,6 +443,60 @@ def _install_routes(app: FastAPI) -> None:
             source=fact.source,
             permanence=fact.permanence.value,
             last_confirmed_at=fact.last_confirmed_at,
+        )
+
+    @app.get("/v1/memory/search", response_model=list[TurnMatchOut], tags=["memory"])
+    async def search_memory(
+        q: str, limit: int = 8, state: AppState = Depends(get_state)
+    ) -> list[TurnMatchOut]:
+        """Search past conversation (FTS5/BM25, not embeddings -- see
+        docs/architecture/05-phase6-memory.md section 2)."""
+        hits = await state.store.search_turns(q, limit=min(limit, 50))
+        return [
+            TurnMatchOut(
+                session_id=h.session_id,
+                turn_id=h.turn.id,
+                role=str(h.turn.role),
+                content=h.turn.content,
+                created_at=h.turn.created_at,
+                score=h.score,
+            )
+            for h in hits
+        ]
+
+    @app.get("/v1/memory/{key}/why", response_model=FactExplanation, tags=["memory"])
+    async def why_memory(key: str, state: AppState = Depends(get_state)) -> FactExplanation:
+        """Why does AURA believe this? The Phase 6 exit criterion."""
+        from aura.memory.beliefs import assess
+
+        fact = await state.store.get_fact("user", key)
+        if fact is None:
+            raise NotFoundError(f"AURA knows nothing under {key!r}.")
+
+        evidence = await state.store.evidence_for(fact.id, limit=50)
+        belief = assess(evidence)
+        return FactExplanation(
+            fact=FactOut(
+                key=fact.key,
+                value=fact.value,
+                confidence=fact.confidence,
+                evidence_count=fact.evidence_count,
+                source=fact.source,
+                permanence=fact.permanence.value,
+                last_confirmed_at=fact.last_confirmed_at,
+            ),
+            reason=belief.explain(),
+            believed=fact.confidence >= state.settings.memory.injection_floor,
+            evidence=[
+                EvidenceOut(
+                    quote=e.quote,
+                    source=e.source,
+                    session_id=e.session_id,
+                    turn_id=e.turn_id,
+                    created_at=e.created_at,
+                )
+                for e in evidence
+            ],
         )
 
     @app.delete("/v1/memory/{key}", tags=["memory"])

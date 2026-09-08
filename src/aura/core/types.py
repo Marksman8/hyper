@@ -241,6 +241,35 @@ class Permanence(StrEnum):
 
 
 @dataclass(slots=True)
+class Evidence:
+    """One reason AURA believes a fact (spec section 16).
+
+    The utterance itself, not a counter. `facts.evidence_count` could say a
+    belief had four supports; it could never say which four, so a wrong belief
+    could not be traced back to what produced it.
+    """
+
+    fact_id: str
+    quote: str
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    session_id: str | None = None
+    turn_id: str | None = None
+    # 'explicit' when the user said so outright, 'inferred' when a model
+    # proposed it. The distinction drives confidence; see memory/beliefs.py.
+    source: str = "inferred"
+    created_at: float = field(default_factory=time.time)
+
+
+@dataclass(slots=True)
+class TurnMatch:
+    """A conversation turn found by search, with its relevance."""
+
+    turn: Turn
+    score: float
+    session_id: str
+
+
+@dataclass(slots=True)
 class Fact:
     """A single remembered item about the user or the world (spec section 15)."""
 

@@ -119,6 +119,17 @@ class MemoryConfig(_Section):
     db_path: str = "var/data/aura.db"
     history_turns: int = Field(default=12, ge=0, le=200)
     history_char_budget: int = Field(default=12000, gt=0)
+    # Phase 6. Notice durable preferences from conversation. Runs after the
+    # reply, never in the response path. What it learns starts below the
+    # injection floor and needs corroboration on a separate occasion before it
+    # shapes anything -- see memory/beliefs.py and spec section 16.
+    learn_from_conversation: bool = True
+    # A fact is put into the system prompt at or above this confidence. It is
+    # the line between "AURA noticed" and "AURA believes", so raising it makes
+    # AURA more sceptical, not merely quieter.
+    injection_floor: float = Field(default=0.5, ge=0.0, le=1.0)
+    # How many past turns a memory search may pull back into context.
+    search_results: int = Field(default=4, ge=0, le=25)
 
     def resolved_db_path(self) -> Path:
         p = Path(self.db_path)
