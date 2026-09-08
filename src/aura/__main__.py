@@ -9,6 +9,7 @@ aura memory     see and correct what AURA knows
 aura profile    what AURA adapts for you, and why
 aura ab         blind A/B of the adapted persona against the baseline
 aura eval       score AURA against the task suite
+aura evolve     propose, measure and approve config changes
 """
 
 from __future__ import annotations
@@ -137,6 +138,70 @@ def desktop() -> None:
         "[dim]AURA desktop shell. Close the overlay to hide it; quit from the tray.[/dim]"
     )
     DesktopApp().run()
+
+
+# -- controlled evolution -----------------------------------------------------
+#
+# Phase 9. propose -> benchmark -> compare -> HUMAN APPROVAL -> deploy.
+# `search` never applies anything; `apply` always asks for a name.
+
+evolve_app = typer.Typer(
+    name="evolve",
+    help="Propose, measure and (with approval) deploy configuration changes.",
+    no_args_is_help=True,
+)
+app.add_typer(evolve_app)
+
+
+@evolve_app.command("knobs")
+def evolve_knobs() -> None:
+    """What may be tuned, and what is permanently excluded."""
+    from aura.clients.evolve_cli import run_knobs
+
+    run_knobs()
+
+
+@evolve_app.command("search")
+def evolve_search(
+    knob: str | None = typer.Option(None, "--knob", help="Tune just this one."),
+    repeats: int = typer.Option(3, "--repeats", "-n", min=1, max=10),
+) -> None:
+    """Propose candidates and measure them. Applies nothing."""
+    from aura.clients.evolve_cli import search_entry
+
+    search_entry(knob, repeats)
+
+
+@evolve_app.command("list")
+def evolve_list() -> None:
+    """Every candidate proposed so far."""
+    from aura.clients.evolve_cli import run_list
+
+    run_list()
+
+
+@evolve_app.command("show")
+def evolve_show(candidate_id: str = typer.Argument(...)) -> None:
+    """The full diff and verdict for one candidate."""
+    from aura.clients.evolve_cli import run_show
+
+    run_show(candidate_id)
+
+
+@evolve_app.command("apply")
+def evolve_apply(candidate_id: str = typer.Argument(...)) -> None:
+    """Deploy an approved candidate. Asks for your name; there is no flag."""
+    from aura.clients.evolve_cli import run_apply
+
+    asyncio.run(run_apply(candidate_id))
+
+
+@evolve_app.command("rollback")
+def evolve_rollback() -> None:
+    """Restore the configuration from before the last deploy."""
+    from aura.clients.evolve_cli import run_rollback
+
+    asyncio.run(run_rollback())
 
 
 # -- evaluation ---------------------------------------------------------------

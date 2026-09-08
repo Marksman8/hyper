@@ -208,3 +208,41 @@ def test_an_unknown_category_loads_as_general(tmp_path: Path) -> None:
         '{"results": [{"task_id": "t", "category": "invented_later", "attempts": []}]}'
     )
     assert load_report(path).results[0].category is Category.GENERAL
+
+
+# -- the noise floor scales with the suite ----------------------------------
+
+
+def test_more_tasks_makes_the_comparison_more_sensitive() -> None:
+    """The flaw the first version had.
+
+    A floor based on the raw spread does not shrink as tasks are added, so
+    doubling the suite bought no extra sensitivity -- closing off the only
+    route to detecting a real improvement. The headline is a mean, so its
+    uncertainty is the standard error, which does shrink.
+    """
+    from aura.eval.compare import _noise_floor
+
+    small_a, small_b = _uniform(6, 2), _uniform(6, 2)
+    large_a, large_b = _uniform(60, 2), _uniform(60, 2)
+
+    # Same per-task spread in both, only the count differs.
+    assert _noise_floor(large_a, large_b) < _noise_floor(small_a, small_b)
+
+
+def test_a_consistent_suite_has_a_tighter_floor_than_a_flaky_one() -> None:
+    from aura.eval.compare import _noise_floor
+
+    consistent = _report({f"t{i}": (3, 3) for i in range(12)})
+    flaky = _report({f"t{i}": (i % 4, 3) for i in range(12)})
+
+    assert _noise_floor(consistent, consistent) < _noise_floor(flaky, flaky)
+
+
+def test_the_floor_never_drops_below_one_attempt() -> None:
+    """However consistent the suite, a difference smaller than a single
+    attempt flipping is not something the sample can resolve."""
+    from aura.eval.compare import _noise_floor
+
+    perfect = _report({f"t{i}": (3, 3) for i in range(12)})
+    assert _noise_floor(perfect, perfect) >= 1.0 / perfect.total_runs

@@ -75,17 +75,27 @@ class Comparison:
 def _noise_floor(incumbent: Report, candidate: Report) -> float:
     """How large a difference has to be before it means anything.
 
-    Combines the per-task spread of both runs with the resolution the sample
-    size actually supports. With three repeats of twelve tasks, one task
-    flipping moves the headline by ~2.8 points, so anything smaller than that
-    is not a measurement -- it is rounding.
+    The headline is a *mean* of per-task rates, so the uncertainty that matters
+    is the uncertainty in that mean -- the standard error, spread / sqrt(tasks)
+    -- not the spread itself.
+
+    The first version used `spread / 2`, which gave a similar number on the
+    suite it was written against and was wrong in a way that mattered: it does
+    not shrink as tasks are added. Under it, doubling the suite size bought no
+    extra sensitivity, so the only route to detecting a real improvement was
+    closed off. Phase 9 depends on that route being open.
+
+    Two standard errors is the bar: at one, roughly a third of pure-noise
+    comparisons would read as results, and a hill-climber makes a great many
+    comparisons.
     """
-    spread = math.hypot(incumbent.spread, candidate.spread)
-    runs = max(1, min(incumbent.total_runs, candidate.total_runs))
-    resolution = 1.0 / runs
-    # Half the combined spread: the spread is across tasks, and a headline is
-    # their mean, so using it whole would set the bar absurdly high.
-    return max(resolution, spread / 2.0)
+    resolution = 1.0 / max(1, min(incumbent.total_runs, candidate.total_runs))
+
+    def sem(report: Report) -> float:
+        tasks = len(report.results)
+        return report.spread / math.sqrt(tasks) if tasks else 0.0
+
+    return max(resolution, 2.0 * math.hypot(sem(incumbent), sem(candidate)))
 
 
 def _deltas(incumbent: Report, candidate: Report) -> list[TaskDelta]:

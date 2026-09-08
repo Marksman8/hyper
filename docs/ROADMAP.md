@@ -285,6 +285,42 @@ threshold, and it should be measured before any GA code is written.
 and deployed only after explicit approval — with the whole chain in the audit
 log.
 
+**Status: the chain is built and demonstrated end to end.**
+
+`aura evolve search` proposes, evaluates against a throwaway database, and
+compares. `aura evolve apply` asks for a name and refuses without one. Verified
+live: an `indistinguishable` candidate was refused even with a name typed, and
+the refusal landed in the audit table at CRITICAL.
+
+Candidates are **configuration, never generated code**. That is what makes this
+safe without a real sandbox: config is bounded, reversible, and cannot
+introduce a capability that did not already exist.
+
+The optimiser cannot tune its own safety envelope. `evolution/space.py` is an
+allow-list of 7 knobs; 14 settings are permanently excluded, including the
+permission ceiling, the workspace guard, audit, the privacy gate and the
+emergency stop. A hill-climber finds whatever makes the number go up, so if
+loosening a guard scored better it would loosen the guard — the allow-list
+makes that inexpressible rather than merely discouraged.
+
+Findings from the first real search:
+
+- Temperature 0.85 scored 1.6% above baseline and was correctly rejected as
+  noise: one flaky task landing differently moves the headline by exactly
+  (1/3)/21 = 1.59%. It also contradicted the hypothesis the knob was documented
+  with — the *higher* setting scored better — which is why one measures.
+- **A real flaw in Phase 8's noise floor**: `spread / 2` did not shrink as
+  tasks were added, so growing the suite bought no sensitivity. Now two
+  standard errors of the mean, which does scale.
+- **The headroom problem is not solved.** Eight harder tasks moved the baseline
+  97.4% -> 96.8%. The remaining headroom is two flaky tasks, about 3% against a
+  5.3% floor. The machinery is correct; the signal is still too coarse to
+  resolve the improvements available on it.
+
+Not built: genetic algorithms (unchanged reasoning — one evaluation is ~63
+model calls), code generation of any kind, and unattended optimisation that
+applies what it finds.
+
 ---
 
 ## Phase 10 — Advanced
