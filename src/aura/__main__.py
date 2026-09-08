@@ -4,6 +4,7 @@ aura serve      run the core (API + orchestrator + memory)
 aura chat       interactive client against a running core
 aura status     one-shot status report
 aura doctor     check this machine can actually run AURA
+aura vision     control what AURA may look at
 """
 
 from __future__ import annotations
@@ -132,6 +133,87 @@ def desktop() -> None:
         "[dim]AURA desktop shell. Close the overlay to hide it; quit from the tray.[/dim]"
     )
     DesktopApp().run()
+
+
+# -- vision ------------------------------------------------------------------
+#
+# The human half of the vision controls. The model gets tools that can only
+# narrow what AURA may see (aura/tools/vision.py); turning it on is a decision
+# a person makes, here.
+
+vision_app = typer.Typer(
+    name="vision", help="Control what AURA may look at.", no_args_is_help=True
+)
+app.add_typer(vision_app)
+
+
+@vision_app.command("status")
+def vision_status() -> None:
+    """What AURA is currently allowed to see."""
+    from aura.clients.vision_cli import run_status
+
+    asyncio.run(run_status())
+
+
+@vision_app.command("on")
+def vision_on(
+    active: bool = typer.Option(
+        False,
+        "--active",
+        help="Also allow background observation, not only when you ask.",
+    ),
+) -> None:
+    """Turn vision on.
+
+    Defaults to assist mode - AURA looks only when asked. `--active` is the
+    stronger grant and exists mostly for the observation loop that is not
+    built yet.
+    """
+    from aura.clients.vision_cli import run_set_mode
+
+    asyncio.run(run_set_mode("active" if active else "assist"))
+
+
+@vision_app.command("off")
+def vision_off() -> None:
+    """Turn vision off. Capture stops; held frames are discarded."""
+    from aura.clients.vision_cli import run_set_mode
+
+    asyncio.run(run_set_mode("private"))
+
+
+@vision_app.command("deny")
+def vision_deny(app_name: str = typer.Argument(..., help="e.g. Chrome")) -> None:
+    """Never look at one application, leaving vision otherwise on."""
+    from aura.clients.vision_cli import run_deny
+
+    asyncio.run(run_deny(app_name))
+
+
+@vision_app.command("allow")
+def vision_allow(app_name: str = typer.Argument(..., help="e.g. Code")) -> None:
+    """Look at ONLY the named applications. Repeat to add more."""
+    from aura.clients.vision_cli import run_allow
+
+    asyncio.run(run_allow(app_name))
+
+
+@vision_app.command("monitors")
+def vision_monitors() -> None:
+    """List the displays attached to this machine."""
+    from aura.clients.vision_cli import run_monitors
+
+    asyncio.run(run_monitors())
+
+
+@vision_app.command("read")
+def vision_read(
+    monitor: int = typer.Option(1, "--monitor", "-m", help="Which display, from 1."),
+) -> None:
+    """Read the screen once, through the same tool the model would call."""
+    from aura.clients.vision_cli import run_read
+
+    asyncio.run(run_read(monitor))
 
 
 @app.command()

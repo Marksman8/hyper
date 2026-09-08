@@ -37,6 +37,8 @@ from aura.api.schemas import (
     ToolSpecOut,
     TurnOut,
     UsageOut,
+    VisionAppRequest,
+    VisionModeRequest,
 )
 from aura.config import Settings, get_settings
 from aura.core.orchestrator import Orchestrator
@@ -562,6 +564,60 @@ def _install_routes(app: FastAPI) -> None:
             detail={"engaged": body.engaged},
         )
         return {"emergency_stop": body.engaged}
+
+    # -- vision ---------------------------------------------------------------
+    #
+    # The human half of the vision controls. The model gets tools that can only
+    # narrow what AURA sees; widening happens here, where a person is asking.
+
+    @app.get("/v1/vision", tags=["vision"])
+    async def vision_status(state: AppState = Depends(get_state)) -> dict[str, Any]:
+        from aura.vision.service import get_vision
+
+        return dict(get_vision(state.settings).status())
+
+    @app.post("/v1/vision/mode", tags=["vision"])
+    async def set_vision_mode(
+        body: VisionModeRequest, state: AppState = Depends(get_state)
+    ) -> dict[str, Any]:
+        """Turn vision on or off. Audited, because it changes what AURA can see."""
+        from aura.vision.privacy import VisionMode
+        from aura.vision.service import get_vision
+
+        service = get_vision(state.settings)
+        service.set_mode(VisionMode(body.mode))
+        await state.audit.record(
+            actor="user", action="vision.set_mode", detail={"mode": body.mode}
+        )
+        return dict(service.status())
+
+    @app.post("/v1/vision/deny", tags=["vision"])
+    async def deny_vision_app(
+        body: VisionAppRequest, state: AppState = Depends(get_state)
+    ) -> dict[str, Any]:
+        from aura.vision.service import get_vision
+
+        service = get_vision(state.settings)
+        service.policy.deny_app(body.app)
+        await state.audit.record(
+            actor="user", action="vision.deny_app", detail={"app": body.app}
+        )
+        return dict(service.status())
+
+    @app.post("/v1/vision/allow", tags=["vision"])
+    async def allow_vision_app(
+        body: VisionAppRequest, state: AppState = Depends(get_state)
+    ) -> dict[str, Any]:
+        """Restrict vision to named applications - an allow-list of one, grown
+        by repeating the call."""
+        from aura.vision.service import get_vision
+
+        service = get_vision(state.settings)
+        service.policy.allow_only(body.app)
+        await state.audit.record(
+            actor="user", action="vision.allow_app", detail={"app": body.app}
+        )
+        return dict(service.status())
 
     @app.get("/v1/audit", tags=["control"])
     async def audit_log(

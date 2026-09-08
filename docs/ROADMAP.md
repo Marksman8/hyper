@@ -120,6 +120,22 @@ does not fit 8 GB VRAM alongside a resident LLM. What is built instead:
 **Exit criteria**: "AURA, don't look at Chrome" measurably stops frames being
 captured from that window, verified by instrumentation, not by asking the model.
 
+**Status: done**, except the continuous loop, which is deliberately deferred.
+
+The exit criterion is met and tested. `test_vision_privacy.py` drives capture
+through a backend that counts grabs and asserts the count does not move after
+`deny_app("Chrome")` — a refusal that captured the frame and discarded it would
+pass a weaker test and fail the promise. Vision defaults to **off**.
+
+Built: on-demand capture, multi-monitor, foreground-window identification,
+OCR behind an `OCRProvider` seam, change detection, four tools, and the
+human-only controls that turn vision on (`aura vision`, `/v1/vision/*`).
+
+Not built: the observation loop. Change detection exists and is tested so the
+loop has its trigger; nothing calls it on a timer. See
+`docs/architecture/04-phase5-vision.md` §8 for measured OCR cost — the honest
+number is 2s on a sparse desktop and 10-30s on a text-dense page.
+
 ---
 
 ## Phase 6 — Memory + user model

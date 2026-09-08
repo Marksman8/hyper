@@ -17,6 +17,7 @@ from aura.tools.filesystem import filesystem_tools
 from aura.tools.python_exec import python_tools
 from aura.tools.registry import ToolRegistry
 from aura.tools.types import ToolContext
+from aura.tools.vision import vision_tools
 
 log = get_logger(__name__)
 
@@ -29,6 +30,10 @@ def build_registry(settings: Settings) -> ToolRegistry:
     registry.register_all(application_tools())
     if settings.tools.python_enabled:
         registry.register_all(python_tools())
+    # Registered whatever the vision mode. The tools are the thing that
+    # explains a refusal; withholding them in private mode would leave the
+    # model unable to say why it cannot look.
+    registry.register_all(vision_tools(settings))
     log.info("tools.registry_built", tools=registry.names())
     return registry
 

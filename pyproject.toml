@@ -47,6 +47,15 @@ desktop = [
     "pillow>=11.0",
 ]
 
+# Phase 5. Still no torch: mss is a thin screen-capture shim and RapidOCR runs
+# on onnxruntime, which the voice extra already pulls in.
+vision = [
+    "mss>=10.0",                  # screen capture, multi-monitor
+    "rapidocr-onnxruntime>=1.4",  # OCR on ONNX
+    "pywin32>=310; sys_platform == 'win32'",  # window and process detection
+    "numpy>=2.1",
+]
+
 [project.scripts]
 aura = "aura.__main__:app"
 
@@ -114,6 +123,12 @@ module = [
     "faster_whisper.*",
     "piper.*",
     "onnxruntime.*",
+    # Phase 5. Same rule: confined to aura/vision/, which is the only
+    # package permitted to import them (tests/unit/test_seam.py).
+    "mss.*",
+    "rapidocr_onnxruntime.*",
+    "win32gui.*",
+    "win32process.*",
 ]
 ignore_missing_imports = true
 

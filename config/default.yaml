@@ -114,3 +114,41 @@ agent:
   max_seconds: 180.0
   # Choosing a tool is a decision, not a creative act.
   tool_temperature: 0.2
+
+vision:
+  # Phase 5. OFF by default, and that is not timidity: reading a file is
+  # bounded by the workspace allow-list, but reading the screen is bounded by
+  # whatever happens to be in front of you - which may be a password manager,
+  # a bank, or someone else's messages.
+  #   private  no capture at all (default)
+  #   assist   capture only when you ask
+  #   active   capture when you ask and, once the loop exists, on events
+  #   sleep    everything paused
+  # Turn it on with `aura vision on`; the model cannot turn it on itself.
+  mode: "private"
+  # Never captured, matched against the foreground window title and the
+  # process name. `aura vision deny Chrome` adds to this at runtime.
+  deny_apps: []
+  # When non-empty, the ONLY applications captured.
+  allow_apps: []
+  denied_monitors: []
+  # Added to the built-in credential patterns in vision/privacy.py, never
+  # substituted for them: editing this file cannot switch off the rule that
+  # protects your password manager.
+  extra_deny_titles: []
+  ocr_backend: "rapidocr"
+  # Below this, a recognised line is reported as unclear rather than as text.
+  # OCR's failure mode is confident nonsense.
+  ocr_min_confidence: 0.5
+  # A full IDE screenshot OCRs to hundreds of fragments, most of them chrome.
+  max_lines: 200
+  # Detection resolution cap, long side. RapidOCR ships tuned for photos of
+  # documents: its default does not downscale a 1920x1080 screenshot at all,
+  # which measured 42 seconds per read here - past the tool's own timeout.
+  # Lower is faster and blurrier.
+  ocr_det_side: 1600
+  # Bounded, and not only out of politeness to the resident LLM: the -1
+  # default oversubscribes 24 logical cores and measured 5x SLOWER on
+  # detection. 8 was the best end-to-end setting on this machine.
+  ocr_threads: 8
+  change_threshold: 0.02

@@ -202,5 +202,20 @@ class EStopRequest(BaseModel):
     engaged: bool
 
 
+class VisionModeRequest(BaseModel):
+    """Change what AURA may look at.
+
+    Deliberately an HTTP endpoint and not a tool. Turning vision *on* is a
+    human decision; see aura/tools/vision.py for why the model is only ever
+    given the narrowing half.
+    """
+
+    mode: Literal["private", "assist", "active", "sleep"]
+
+
+class VisionAppRequest(BaseModel):
+    app: str = Field(min_length=1, max_length=200)
+
+
 class ErrorResponse(BaseModel):
     error: dict[str, Any]

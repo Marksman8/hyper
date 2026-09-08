@@ -337,6 +337,44 @@ class AgentConfig(_Section):
     tool_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
 
 
+class VisionConfig(_Section):
+    """Phase 5. What AURA may look at.
+
+    The mode is a config value so that a machine can be set up permanently
+    private, but it is also changeable at runtime: "don't look" has to take
+    effect when it is said, not at the next restart.
+    """
+
+    # PRIVATE by default. Spec 10 - vision is off until the user turns it on.
+    # A screen read is bounded by nothing, unlike a file read, so the safe
+    # default is "no" rather than "yes with restrictions".
+    mode: str = Field(default="private", pattern="^(private|assist|active|sleep)$")
+    # Applications never captured, matched against the foreground window title
+    # and process name.
+    deny_apps: list[str] = Field(default_factory=list)
+    # When non-empty, the only applications captured.
+    allow_apps: list[str] = Field(default_factory=list)
+    denied_monitors: list[int] = Field(default_factory=list)
+    # Extra title patterns on top of the built-in credential list in
+    # vision/privacy.py. Additive: the built-ins cannot be configured away.
+    extra_deny_titles: list[str] = Field(default_factory=list)
+    ocr_backend: str = Field(default="rapidocr", pattern="^(rapidocr|null)$")
+    # Below this a recognised line is reported as uncertain rather than as text.
+    ocr_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Cap on lines returned to the model. A full IDE screenshot can OCR to
+    # hundreds of fragments, most of them chrome, and flooding the context with
+    # them buries the answer the user asked for.
+    max_lines: int = Field(default=200, ge=10, le=2000)
+    # Detection resolution cap, long side. RapidOCR's own default does not
+    # downscale a 1920x1080 screenshot at all, which measured 42s per read
+    # on this machine. Lower is faster and blurrier; see vision/ocr/rapid.py.
+    ocr_det_side: int = Field(default=1600, ge=480, le=4096)
+    # onnxruntime threads. Bounded because AURA shares the machine with a
+    # resident LLM and a voice loop that both care about latency.
+    ocr_threads: int = Field(default=8, ge=1, le=32)
+    change_threshold: float = Field(default=0.02, ge=0.0, le=1.0)
+
+
 class PersonaConfig(_Section):
     name: str = "AURA"
     system_prompt: str = "You are AURA, a local-first personal AI assistant."
@@ -420,6 +458,7 @@ class Settings(BaseSettings):
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    vision: VisionConfig = Field(default_factory=VisionConfig)
 
     @classmethod
     def settings_customise_sources(

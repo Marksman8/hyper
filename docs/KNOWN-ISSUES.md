@@ -67,3 +67,21 @@ That has now failed twice in opposite directions.
 - `src/aura/voice/session.py` — `_check_barge_in`, `_current_barge_threshold`
 - `src/aura/config.py` — `VoiceConfig.barge_in_*`
 - `src/aura/__main__.py` — `calibrate`
+
+## Vision: OCR is slow on text-dense screens
+
+**Status:** understood, partially mitigated (Phase 5).
+
+Reading a full 1920x1080 screen takes ~2s on a sparse desktop and 10-30s on a
+page dense with text. Root cause is measured, not guessed: RapidOCR's
+recognition stage is superlinear in text-crop width (30ms per batch at 320px,
+364ms at 1280px) and crops come from the full-resolution image.
+
+Mitigated by capping detection resolution and bounding onnxruntime threads
+(the `-1` default oversubscribes 24 logical cores and measured 5x slower).
+Out of the box this took 42s and exceeded the tool timeout entirely.
+
+**Next fix, when it matters:** capture and read only the foreground window's
+rectangle instead of the whole desktop. Faster, and closer to what the user
+means by "read my screen".
+

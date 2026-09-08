@@ -75,3 +75,35 @@ def test_no_model_filenames_outside_config() -> None:
         p.relative_to(SRC) for p in SRC.rglob("*.py") if ".gguf" in p.read_text(encoding="utf-8")
     ]
     assert not offenders, f"Model filenames hard-coded in: {offenders}"
+
+
+# The same discipline, one layer down. Vision backends are replaceable too: mss
+# is a screen-capture shim and RapidOCR is one recogniser among several, and a
+# VLM should slot in behind OCRProvider without touching anything above it.
+VISION_LIBS = frozenset({"mss", "rapidocr_onnxruntime", "win32gui", "win32process"})
+VISION_PKG = SRC / "vision"
+
+
+def test_vision_libraries_stay_inside_the_vision_package() -> None:
+    offenders: list[str] = []
+    for path in SRC.rglob("*.py"):
+        if VISION_PKG == path.parent or VISION_PKG in path.parents:
+            continue
+        leaked = _imported_roots(path) & VISION_LIBS
+        if leaked:
+            offenders.append(f"{path.relative_to(SRC)} imports {sorted(leaked)}")
+    assert not offenders, (
+        "Capture and OCR libraries belong in aura/vision/ only: " + "; ".join(offenders)
+    )
+
+
+def test_ocr_library_stays_behind_the_provider_seam() -> None:
+    """Only aura/vision/ocr/ may name a recogniser."""
+    ocr_pkg = VISION_PKG / "ocr"
+    offenders = [
+        str(path.relative_to(SRC))
+        for path in VISION_PKG.rglob("*.py")
+        if ocr_pkg not in path.parents
+        and "rapidocr_onnxruntime" in _imported_roots(path)
+    ]
+    assert not offenders, f"OCR backend imported outside vision/ocr/: {offenders}"
