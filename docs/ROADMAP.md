@@ -185,6 +185,33 @@ Prompt and workflow adaptation driven by the user model. No fine-tuning yet.
 **Exit criteria**: a blind A/B against the v0.1 persona shows a preference for
 the adapted behaviour on a held-out set of the user's own tasks.
 
+**Status: built; the exit criterion is pending the user, deliberately.**
+
+A stored preference now becomes an *instruction* placed last in the system
+prompt, and -- when stated outright -- a token budget. Verified live on the
+real stack: the same question answered in 371 characters with adaptation on and
+672 with it off. That is one anecdote, not evidence.
+
+The evidence requirements are asymmetric, and that is the safety decision of
+the phase. Prompt directives follow any believed preference; **sampling changes
+follow only explicit ones**. A wrong directive gives a differently-toned
+answer; a wrong `max_tokens` truncates mid-sentence, and the user has no way to
+connect a broken reply to something they said weeks ago. Parameters are also
+floored, because brevity is a preference, not permission to truncate.
+
+`aura ab` is built as an *instrument*, not a verdict: same prompt, both arms
+from one running AURA, random order, no labels, tally stored with position
+recorded so bias is detectable. **It refuses to claim significance.** One user
+rating a handful of prompts cannot produce a significant result -- 13-7 of 20
+is a coin -- so the summary says "within what chance would produce" rather than
+reporting a win. The criterion is met when the user has actually run it and the
+tally leans; that is a real answer at the sample size that exists, not a green
+tick from a test that only ever asked a machine.
+
+Not built: fine-tuning (Phase 8, and it needs Phase 8's harness first) and
+procedural memory -- learning *how* the user likes tasks sequenced needs more
+signal than exists yet.
+
 ---
 
 ## Phase 8 — Learning + evaluation

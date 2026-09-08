@@ -181,6 +181,10 @@ class OpenAICompatProvider(LLMProvider):
             pass
         return ProviderHealth(available=True, detail="ok", model=model, latency_ms=latency)
 
+    @property
+    def default_params(self) -> GenerationParams:
+        return self._defaults
+
     async def chat(
         self,
         messages: Sequence[Message],

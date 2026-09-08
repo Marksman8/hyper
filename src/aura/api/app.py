@@ -30,6 +30,8 @@ from aura.api.schemas import (
     FactIn,
     FactOut,
     OpenAIChatRequest,
+    ProfileDimension,
+    ProfileOut,
     ProviderStatus,
     ResourceStatus,
     SessionOut,
@@ -295,7 +297,11 @@ def _install_routes(app: FastAPI) -> None:
             )
 
         result = await state.orchestrator.chat(
-            body.message, session_id=body.session_id, params=params, spoken=body.spoken
+            body.message,
+            session_id=body.session_id,
+            params=params,
+            spoken=body.spoken,
+            personalize=body.personalize,
         )
         return ChatResponse(
             session_id=result.session_id,
@@ -608,6 +614,21 @@ def _install_routes(app: FastAPI) -> None:
             data=result.data,
             duration_ms=result.duration_ms,
             decision=result.decision,
+        )
+
+    # -- personalization (Phase 7) -------------------------------------------
+
+    @app.get("/v1/profile", response_model=ProfileOut, tags=["memory"])
+    async def profile(state: AppState = Depends(get_state)) -> ProfileOut:
+        """What AURA adapts for this user, and which fact drives each change."""
+        from aura.personalization import directives as build_directives
+
+        user = await state.orchestrator.user_profile()
+        return ProfileOut(
+            enabled=state.settings.personalization.enabled,
+            dimensions=[ProfileDimension(**d) for d in user.describe()],  # type: ignore[arg-type]
+            directives=build_directives(user),
+            other_facts=[f"{f.key}: {f.value}" for f in user.other_facts],
         )
 
     # -- control & observability ---------------------------------------------

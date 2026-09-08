@@ -42,6 +42,17 @@ class LLMProvider(ABC):
     def name(self) -> str:
         """Stable identifier used in logs, audit rows and persisted turns."""
 
+    @property
+    def default_params(self) -> GenerationParams:
+        """Sampling used when a caller passes none.
+
+        Exposed because Phase 7 personalization has to adapt *something* when
+        the caller supplied nothing -- and inventing a fresh GenerationParams
+        would silently discard whatever the backend was configured with. A
+        generic notion, not a backend-specific one, so it belongs on the seam.
+        """
+        return GenerationParams()
+
     @abstractmethod
     def info(self) -> ProviderInfo:
         """Static capability description. Must not perform I/O."""

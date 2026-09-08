@@ -152,3 +152,17 @@ vision:
   # detection. 8 was the best end-to-end setting on this machine.
   ocr_threads: 8
   change_threshold: 0.02
+
+personalization:
+  # Phase 7. Acting on what Phase 6 learned: preferences become instructions
+  # in the system prompt, and -- when stated outright -- a token budget.
+  #
+  # Adaptation changes behaviour every turn without being asked. If it cannot
+  # be switched off it cannot be blamed, and anything that cannot be blamed
+  # cannot be fixed. `aura profile` shows what is being applied and why.
+  enabled: true
+  # Prompt directives follow any believed preference. Sampling changes follow
+  # only ones you stated outright: a wrong directive gives a differently-toned
+  # answer, but a wrong token limit truncates mid-sentence and you would have
+  # no way to connect that to something you said weeks ago.
+  adapt_parameters: true

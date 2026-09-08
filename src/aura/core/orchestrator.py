@@ -42,6 +42,7 @@ from aura.errors import EmergencyStopError
 from aura.logging import bind_session_id, current_session_id, get_logger
 from aura.memory.store import MemoryStore, build_history
 from aura.models.base import LLMProvider
+from aura.personalization import UserProfile, apply_parameters, build_profile, directives
 from aura.security.audit import AuditLog
 from aura.security.permissions import Decision, PermissionLevel
 
@@ -117,7 +118,7 @@ class Orchestrator:
     # -- prompt assembly -----------------------------------------------------
 
     async def _system_messages(
-        self, *, spoken: bool = False, with_tools: bool = False
+        self, *, spoken: bool = False, with_tools: bool = False, personalize: bool = True
     ) -> list[Message]:
         """System prompt plus whatever AURA durably knows about the user.
 
@@ -132,22 +133,67 @@ class Orchestrator:
         if spoken:
             parts.append(self._settings.persona.voice_system_prompt.strip())
 
-        facts = await self._store.list_facts(scope="user")
-        relevant = [
-            f
-            for f in facts
-            if f.confidence >= self._settings.memory.injection_floor
-            and f.permanence.value in ("long_term", "permanent")
-        ]
-        if relevant:
+        profile = await self.user_profile()
+
+        # Facts AURA has no machinery for are still context: a closed
+        # vocabulary that dropped `editor: neovim` would make AURA worse at
+        # knowing the user in exchange for being better at formatting.
+        if profile.other_facts:
             lines = ["What you know about this user:"]
-            lines += ["- " + f.key + ": " + f.value for f in relevant[:20]]
+            lines += ["- " + f.key + ": " + f.value for f in profile.other_facts[:20]]
             parts.append("\n".join(lines))
+
+        # Directives go LAST, and are phrased as instructions rather than as
+        # facts. "Keep answers brief" is acted on; "response_length: short" is
+        # trivia the model must first interpret, competing with everything
+        # above it for attention.
+        if personalize and self._settings.personalization.enabled:
+            adaptations = directives(profile)
+            if adaptations:
+                parts.append("How this user likes you to answer:\n" + "\n".join(adaptations))
 
         return [Message(role=Role.SYSTEM, content="\n\n".join(parts))]
 
+    async def user_profile(self) -> UserProfile:
+        """What AURA should do differently for this user, derived fresh.
+
+        Not cached: a preference deleted mid-conversation must stop applying
+        immediately (spec section 23), and a cached profile would keep it alive
+        until the next restart.
+        """
+        facts = await self._store.list_facts(scope="user")
+        return build_profile(facts, floor=self._settings.memory.injection_floor)
+
+    async def _personalise(
+        self, params: GenerationParams | None
+    ) -> GenerationParams | None:
+        """Apply the sampling changes the profile justifies.
+
+        Only explicit preferences have any effect here; see
+        personalization/profile.py for why prompts and parameters are given
+        different evidence requirements.
+        """
+        cfg = self._settings.personalization
+        if not cfg.enabled or not cfg.adapt_parameters:
+            return params
+
+        # None means "use the backend's configured defaults". Adapting starts
+        # from those rather than from a fresh object, so personalization tunes
+        # the configuration instead of quietly replacing it.
+        base = params if params is not None else self._provider.default_params
+        adapted = apply_parameters(await self.user_profile(), base)
+        # Nothing changed: hand back None so the provider keeps its own path.
+        if params is None and adapted is base:
+            return None
+        return adapted
+
     async def _assemble(
-        self, session_id: str, *, spoken: bool = False, with_tools: bool = False
+        self,
+        session_id: str,
+        *,
+        spoken: bool = False,
+        with_tools: bool = False,
+        personalize: bool = True,
     ) -> list[Message]:
         """Build the prompt from the system message plus stored history.
 
@@ -158,7 +204,9 @@ class Orchestrator:
         history = await self._store.recent_turns(session_id, self._settings.memory.history_turns)
         history = build_history(history, self._settings.memory.history_char_budget)
 
-        messages = await self._system_messages(spoken=spoken, with_tools=with_tools)
+        messages = await self._system_messages(
+            spoken=spoken, with_tools=with_tools, personalize=personalize
+        )
         messages += [t.to_message() for t in history]
         return messages
 
@@ -171,6 +219,7 @@ class Orchestrator:
         *,
         spoken: bool = False,
         with_tools: bool = False,
+        personalize: bool = True,
     ) -> tuple[Session, list[Message]]:
         """Shared prologue for streaming and non-streaming turns."""
         self._guard()
@@ -184,7 +233,9 @@ class Orchestrator:
         # Evidence that cannot point at a turn cannot be deduplicated, and
         # section 16's "separate occasions" rule depends on that.
         self._last_user_turn_id = turn.id
-        messages = await self._assemble(session.id, spoken=spoken, with_tools=with_tools)
+        messages = await self._assemble(
+            session.id, spoken=spoken, with_tools=with_tools, personalize=personalize
+        )
         return session, messages
 
     # -- learning (Phase 6) ---------------------------------------------------
@@ -231,8 +282,19 @@ class Orchestrator:
         session_id: str | None = None,
         params: GenerationParams | None = None,
         spoken: bool = False,
+        personalize: bool = True,
     ) -> TurnResult:
-        session, messages = await self._open_turn(session_id, user_text, spoken=spoken)
+        """`personalize=False` answers as the unadapted persona.
+
+        Exists so adaptation can be switched off and therefore blamed -- and
+        because the A/B harness needs both sides of the comparison from one
+        running AURA.
+        """
+        session, messages = await self._open_turn(
+            session_id, user_text, spoken=spoken, personalize=personalize
+        )
+        if personalize:
+            params = await self._personalise(params)
         started = time.perf_counter()
 
         try:
@@ -415,6 +477,7 @@ class Orchestrator:
         dropping it desynchronises AURA's memory from the user's.
         """
         session, messages = await self._open_turn(session_id, user_text, spoken=spoken)
+        params = await self._personalise(params)
         started = time.perf_counter()
         collected: list[str] = []
         reasoning: list[str] = []

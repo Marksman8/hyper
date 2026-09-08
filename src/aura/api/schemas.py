@@ -25,6 +25,10 @@ class ChatRequest(BaseModel):
     # The reply will be spoken, so ask the model for prose rather than
     # markdown. A client that renders text should leave this false.
     spoken: bool = False
+    # Phase 7. False answers as the unadapted persona -- so adaptation can
+    # be switched off and therefore blamed, and so the A/B harness can get
+    # both arms from one running AURA.
+    personalize: bool = True
 
 
 class AgentRequest(BaseModel):
@@ -162,6 +166,26 @@ class TurnMatchOut(BaseModel):
     content: str
     created_at: float
     score: float
+
+
+class ProfileDimension(BaseModel):
+    dimension: str
+    value: str
+    from_fact: str
+    source: str
+    confidence: float
+    drives_parameters: bool
+
+
+class ProfileOut(BaseModel):
+    """What AURA is adapting, and why. Silent adaptation is a debugging
+    nightmare: "AURA is being weird today" has to be answerable."""
+
+    enabled: bool
+    dimensions: list[ProfileDimension]
+    # The exact instruction lines added to the system prompt.
+    directives: list[str]
+    other_facts: list[str]
 
 
 class ProviderStatus(BaseModel):

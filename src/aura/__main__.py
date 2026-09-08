@@ -6,6 +6,8 @@ aura status     one-shot status report
 aura doctor     check this machine can actually run AURA
 aura vision     control what AURA may look at
 aura memory     see and correct what AURA knows
+aura profile    what AURA adapts for you, and why
+aura ab         blind A/B of the adapted persona against the baseline
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import typer
 from rich.console import Console
 
 from aura import __version__
-from aura.config import get_model_catalogue, get_settings, models_dir
+from aura.config import PROJECT_ROOT, get_model_catalogue, get_settings, models_dir
 from aura.logging import configure_logging, get_logger
 
 app = typer.Typer(
@@ -134,6 +136,37 @@ def desktop() -> None:
         "[dim]AURA desktop shell. Close the overlay to hide it; quit from the tray.[/dim]"
     )
     DesktopApp().run()
+
+
+# -- personalization ----------------------------------------------------------
+
+
+@app.command()
+def profile() -> None:
+    """Show what AURA adapts for you, and which fact drives each change."""
+    from aura.clients.profile_cli import run_profile
+
+    asyncio.run(run_profile())
+
+
+@app.command()
+def ab(
+    prompt: str = typer.Argument("", help="The prompt to compare. Omit with --tally."),
+    tally: bool = typer.Option(False, "--tally", help="Show results so far and exit."),
+) -> None:
+    """Blind A/B: the adapted persona against the baseline.
+
+    An instrument, not a verdict. It shows two answers with no labels in a
+    random order and records which you picked. A handful of judgements cannot
+    prove anything, and it will say so rather than pretend otherwise.
+    """
+    from aura.clients.profile_cli import run_ab, show_tally
+
+    log_path = PROJECT_ROOT / "var" / "data" / "ab_results.jsonl"
+    if tally or not prompt.strip():
+        show_tally(log_path)
+        return
+    asyncio.run(run_ab(prompt, log_path))
 
 
 # -- memory ------------------------------------------------------------------

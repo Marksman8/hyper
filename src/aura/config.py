@@ -348,6 +348,21 @@ class AgentConfig(_Section):
     tool_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
 
 
+class PersonalizationConfig(_Section):
+    """Phase 7. Acting on what Phase 6 learned.
+
+    Adaptation changes behaviour every turn without the user asking for it. If
+    it cannot be switched off it cannot be blamed, and anything that cannot be
+    blamed cannot be fixed - hence the kill switch and the per-turn opt-out.
+    """
+
+    enabled: bool = True
+    # Prompt directives follow any believed fact. Sampling changes follow only
+    # explicit ones; see personalization/profile.py for why the two paths have
+    # different evidence requirements. Turning this off keeps the directives.
+    adapt_parameters: bool = True
+
+
 class VisionConfig(_Section):
     """Phase 5. What AURA may look at.
 
@@ -470,6 +485,9 @@ class Settings(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
+    personalization: PersonalizationConfig = Field(
+        default_factory=PersonalizationConfig
+    )
 
     @classmethod
     def settings_customise_sources(
