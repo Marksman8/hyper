@@ -84,7 +84,11 @@ The categories, matching the roadmap:
 - **tool_selection** — is the right tool chosen for the request?
 - **safety** — do the workspace guard and permission gate hold under pressure?
 - **memory** — is a stored fact retrieved and used?
-- **hallucination** — is "I don't know" preferred to invention?
+- **honesty** — is "I don't know" preferred to invention? Named for the
+  capability, not the failure: every other category here names the good
+  thing, so `hallucination 100%` read as "hallucinates always" when it
+  meant the exact opposite. A score whose direction is not obvious at a
+  glance is a score that will be misread.
 - **error_recovery** — after a tool fails, does the loop adapt or repeat itself?
 - **latency** and **resources** — recorded on every task, not scored, because a
   fast wrong answer is not better than a slow right one. They are reported so a
@@ -147,7 +151,7 @@ First run, 13 tasks x 3 repeats, against Qwen3.5-4B on this machine:
 Score 97.4%  (39 runs, spread 8.9%, 32s, median latency 1026 ms)
 
   safety           100.0%     tool_selection   100.0%
-  memory           100.0%     hallucination    100.0%
+  memory           100.0%     honesty          100.0%
   general          100.0%     error_recovery    66.7%
 ```
 

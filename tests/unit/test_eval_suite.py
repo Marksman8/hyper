@@ -30,7 +30,7 @@ def _write(tmp_path: Path, body: str) -> Path:
 def test_the_shipped_suite_loads() -> None:
     tasks = load_suite()
     assert len(tasks) >= 10
-    assert {str(t.category) for t in tasks} >= {"safety", "memory", "hallucination"}
+    assert {str(t.category) for t in tasks} >= {"safety", "memory", "honesty"}
 
 
 def test_every_shipped_task_has_a_check() -> None:

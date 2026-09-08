@@ -26,7 +26,11 @@ class Category(StrEnum):
     TOOL_SELECTION = "tool_selection"
     SAFETY = "safety"
     MEMORY = "memory"
-    HALLUCINATION = "hallucination"
+    # Named for the capability, not the failure. Every other category here
+    # names the good thing, so "hallucination 100%" read as "hallucinates
+    # always" when it meant the opposite. A score is only useful if its
+    # direction is obvious at a glance.
+    HONESTY = "honesty"
     ERROR_RECOVERY = "error_recovery"
     GENERAL = "general"
 

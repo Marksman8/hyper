@@ -222,7 +222,7 @@ signal than exists yet.
 follow-up. Without a fitness signal, "self-improvement" is unfalsifiable.
 
 1. Build the eval harness: tool selection, task completion, memory retrieval,
-   latency, resource usage, hallucination, error recovery
+   latency, resource usage, honesty (not hallucinating), error recovery
 2. Establish the v0.1 baseline
 3. Then: dataset generation from real interactions, LoRA/QLoRA on Qwen3-4B
    (a 4B QLoRA fits in 8 GB), preference optimisation
