@@ -230,6 +230,38 @@ follow-up. Without a fitness signal, "self-improvement" is unfalsifiable.
 **Exit criteria**: `aura eval` produces a comparable score; a candidate can be
 compared against the incumbent on identical tasks.
 
+**Status: the harness is done and the baseline is recorded. Fine-tuning is
+deliberately not built.**
+
+Baseline, 13 tasks x 3 repeats on Qwen3.5-4B: **97.4%**, safety 100%, median
+latency 1026 ms. A rerun with no changes compared as *indistinguishable*
+against a 6.3% noise floor -- which is the second half of the exit criterion
+working, not a failure.
+
+The harness refuses to overclaim. Each task runs several times because a 4B at
+temperature 0.7 answers differently every time, and a difference smaller than
+the measured spread is reported as "indistinguishable" rather than as a win.
+Safety is never averaged away: a candidate that gains everywhere and loses one
+safety task is rejected outright.
+
+Two findings from the first real run:
+
+- `recovers_from_a_missing_file` is **flaky** (2/3). Run once it would have
+  been recorded as a clean pass or a clean failure, and both would have been
+  wrong. That is what repeats are for.
+- **The suite is too easy.** 97.4% leaves 2.6% of headroom, so it can detect a
+  regression but barely an improvement. Before Phase 9 hill-climbs on this
+  number, the suite needs harder tasks -- a concrete precondition, in the same
+  spirit as this roadmap's own rule that GA waits for a demonstrated signal.
+
+**Fine-tuning is not built, on purpose.** There is no demonstrated weakness for
+it to fix yet; the training data does not exist (a few hundred turns, mostly
+development chatter); and torch + transformers + peft is ~2.5 GB entering a
+project kept deliberately torch-free for seven phases, on a card already
+holding 3.07 GB of Qwen. The honest sequence is harness -> baseline -> find a
+specific repeatable weakness -> then decide whether LoRA is the right remedy
+for *that* weakness. Steps one and two are done.
+
 ---
 
 ## Phase 9 — Controlled evolution

@@ -8,6 +8,7 @@ aura vision     control what AURA may look at
 aura memory     see and correct what AURA knows
 aura profile    what AURA adapts for you, and why
 aura ab         blind A/B of the adapted persona against the baseline
+aura eval       score AURA against the task suite
 """
 
 from __future__ import annotations
@@ -136,6 +137,47 @@ def desktop() -> None:
         "[dim]AURA desktop shell. Close the overlay to hide it; quit from the tray.[/dim]"
     )
     DesktopApp().run()
+
+
+# -- evaluation ---------------------------------------------------------------
+#
+# Phase 8. Without a fitness signal, "AURA got better" is unfalsifiable, which
+# is why evaluation comes before learning.
+
+
+# Named `run_evaluation` because `eval` shadows a builtin; typer takes the
+# CLI name from the decorator, so the command is still `aura eval`.
+@app.command("eval")
+def run_evaluation(
+    suite: Path | None = typer.Option(
+        None, "--suite", help="Suite YAML. Defaults to the built-in."
+    ),
+    repeats: int = typer.Option(3, "--repeats", "-n", min=1, max=20),
+    save: Path | None = typer.Option(None, "--save", help="Write the report as JSON."),
+    baseline: Path | None = typer.Option(
+        None, "--baseline", help="Compare against a saved report."
+    ),
+    label: str = typer.Option("", "--label", help="A name for this run."),
+    set_baseline: bool = typer.Option(
+        False, "--set-baseline", help="Save as var/data/eval_baseline.json."
+    ),
+) -> None:
+    """Score AURA against the task suite.
+
+    Every task runs several times because a 4B model answers differently each
+    time; the report keeps the spread, and a comparison refuses to call a
+    difference smaller than that spread a result.
+
+    Runs against a throwaway database, so the memory tasks never write into
+    your real memory.
+    """
+    from aura.clients.eval_cli import run_eval
+
+    target = save
+    if set_baseline:
+        target = PROJECT_ROOT / "var" / "data" / "eval_baseline.json"
+
+    asyncio.run(run_eval(suite, repeats, target, baseline, label))
 
 
 # -- personalization ----------------------------------------------------------
