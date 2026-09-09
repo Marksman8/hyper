@@ -113,6 +113,10 @@ ignore = ["S101"]  # assert is fine in tests
 "tests/**" = ["S", "B"]
 # Depends() in argument defaults is the FastAPI idiom, not a mutable default.
 "src/aura/api/*.py" = ["B008"]
+# Optional hooks on a provider ABC: a backend that does not animate should
+# not have to implement four no-ops to satisfy the linter. Same pattern as
+# OCRProvider.load/unload.
+"src/aura/presence/avatar/base.py" = ["B027"]
 # typer.Option()/Argument() in defaults is likewise how typer declares a CLI.
 "src/aura/__main__.py" = ["B008"]
 

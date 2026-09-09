@@ -6,6 +6,7 @@ aura status     one-shot status report
 aura doctor     check this machine can actually run AURA
 aura vision     control what AURA may look at
 aura memory     see and correct what AURA knows
+aura presence   the desktop avatar overlay
 aura profile    what AURA adapts for you, and why
 aura ab         blind A/B of the adapted persona against the baseline
 aura eval       score AURA against the task suite
@@ -274,6 +275,30 @@ def ab(
         show_tally(log_path)
         return
     asyncio.run(run_ab(prompt, log_path))
+
+
+@app.command()
+def presence(
+    cursor: bool = typer.Option(
+        False,
+        "--cursor",
+        help="Let her eyes follow the cursor. Gaze only; the body never moves.",
+    ),
+    anchor: str = typer.Option(
+        "bottom_right",
+        "--anchor",
+        help="bottom_right | bottom_left | top_right",
+    ),
+) -> None:
+    """Run AURA's desktop presence: a transparent avatar overlay.
+
+    A separate process holding no reasoning. It subscribes to Core's event
+    stream and renders the state the presence machine decided. Start
+    `aura serve` first; if Core is down the avatar dims rather than guessing.
+    """
+    from aura.presence.app import run
+
+    raise typer.Exit(run(cursor_awareness=cursor, anchor=anchor))
 
 
 # -- memory ------------------------------------------------------------------
