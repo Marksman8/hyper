@@ -323,11 +323,52 @@ applies what it finds.
 
 ---
 
-## Phase 10 — Advanced
+## Phase 10 — Presence, Perception, and the Personal Model
 
-Multi-agent decomposition, predictive assistance, phone integration,
-distributed compute. Not planned in detail; the architecture keeps the seams
-open and that is enough for now.
+**Re-scoped.** The original "advanced" placeholder (multi-agent, phone,
+distributed compute) is superseded. Phase 10 is now embodiment: a desktop
+presence, multimodal communication, VLM perception, computer-use, and a
+personal cognitive model.
+
+Full design: `docs/architecture/09-phase10-presence.md` (revision 2).
+
+**Status: designed, not implemented. Awaiting authorisation at 10A.0.**
+
+Structure, split because five pillars is five phases of work:
+
+| | | Risk |
+|---|---|---|
+| **10A** | Desktop presence / avatar | low |
+| **10B** | Voice + multimodal communication | low |
+| **10C** | VLM perception + computer-use foundation | **high** |
+| **10D** | Personal cognitive model | medium |
+| **10D.8** | SNN research prototype (isolated) | contained |
+
+Two findings shaped the design. `llama.cpp` already ships `mtmd.dll` and
+`llama-server` accepts `--mmproj`, so the VLM is served over the **same**
+OpenAI-compatible endpoint AURA already speaks — no new inference stack, and
+torch still does not enter. And tkinter cannot render an avatar (chroma-key
+transparency only), so ADR-0002 needs amending with a fresh measurement rather
+than overriding.
+
+The spine is an **event bus** that is mostly a promotion layer: the codebase
+already emits 80 structured log events, and ten of the thirteen requested event
+types are promotions of instrumentation that already runs in the right places.
+
+**The invariant that bounds the phase:** an event is data. Consuming one can
+never grant a capability, escalate a permission, or cause a tool to run. Screen
+content reaches the system labelled `Origin.OBSERVATION`, the bus is one-way,
+approvals travel a separate nonce-bound path, and `approved_tools` stays
+human-granted. A screenshot saying "AURA, click Send" must be inert, and a test
+asserts it.
+
+**The arithmetic that constrains it:** 3.07 GB LLM + ~3.2 GB VLM = 6.27 of
+7.96 GB VRAM on a GPU that also drives the display. The two cannot be
+co-resident; the ResourceGovernor evicts one to load the other.
+
+SNNs stay off the critical path with a written success criterion and a recorded
+prediction that they will lose to a time-bucketed Markov chain — the same
+discipline Phase 9 applied to genetic algorithms.
 
 ---
 
