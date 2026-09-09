@@ -83,3 +83,20 @@ headless install pays nothing.
 
 The overlay becomes something the user interacts with for minutes at a time
 rather than glances at, or a feature needs compositing tkinter cannot do.
+
+---
+
+## Revisited: 2026-09-09 (Phase 10A.0)
+
+Both conditions above were met by the Phase 10 avatar, which is looked at
+continuously and needs per-pixel alpha that tkinter cannot provide -- it offers
+only chroma-key `-transparentcolor`, which fringes on every anti-aliased edge.
+
+**This ADR still stands for the status/approval shell.** The avatar moved to
+PySide6-Essentials in a separate process; see **ADR-0003**.
+
+Worth recording: the 120 MB figure this ADR used for PySide6 was an estimate,
+and it was wrong. Measured, the same window shape costs **50.6 MB** total --
+about 21 MB more than the tkinter shell, not 90 MB more. The decision made here
+was still right for a status panel; the number it was made against was too
+pessimistic.

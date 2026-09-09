@@ -47,6 +47,20 @@ desktop = [
     "pillow>=11.0",
 ]
 
+# Phase 10A. The presence overlay: avatar, subtitle, speech bubble.
+#
+# A SEPARATE PROCESS from AURA Core, and a separate extra, because it is the
+# heaviest UI dependency in the project and Core must stay a 69 MB process that
+# starts fast. `uv sync --extra presence`.
+#
+# tkinter (ADR-0002) stays for the status/approval shell. It cannot do the
+# avatar: it has only chroma-key `-transparentcolor`, which fringes on
+# anti-aliased art, and no compositing. See ADR-0003 for the measurement that
+# justifies the cost.
+presence = [
+    "PySide6-Essentials>=6.8",  # Qt Widgets/Gui/Core only, not the full Qt
+]
+
 # Phase 5. Still no torch: mss is a thin screen-capture shim and RapidOCR runs
 # on onnxruntime, which the voice extra already pulls in.
 vision = [
