@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from aura.config import Settings
+from aura.core.emitter import NULL_EMITTER, EventEmitter
 from aura.logging import get_logger
 from aura.vision.capture import ScreenCapture
 from aura.vision.change import ChangeDetector
@@ -64,6 +65,9 @@ class VisionService:
     capture: ScreenCapture
     ocr: OCRProvider
     changes: ChangeDetector
+    # Phase 10A.3. Set by whoever owns the bus; NULL_EMITTER until then, so
+    # the vision subsystem works identically with or without a listener.
+    events: EventEmitter = NULL_EMITTER
 
     @classmethod
     def from_settings(cls, settings: Settings) -> VisionService:
@@ -84,6 +88,11 @@ class VisionService:
         copy of it is not that promise.
         """
         self.policy.set_mode(mode)
+        # RELIABLE, because the overlay hiding itself is a privacy behaviour:
+        # a dropped "now private" is the one drop that would actually matter.
+        self.events.privacy_mode(
+            str(mode), capturing=mode not in (VisionMode.PRIVATE, VisionMode.SLEEP)
+        )
         if mode in (VisionMode.PRIVATE, VisionMode.SLEEP):
             self.changes.reset()
             self.capture.close()

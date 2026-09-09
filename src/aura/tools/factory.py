@@ -7,6 +7,8 @@ workspace.
 
 from __future__ import annotations
 
+from typing import Any
+
 from aura.config import Settings
 from aura.logging import get_logger
 from aura.security.audit import AuditLog
@@ -56,9 +58,12 @@ def build_context(settings: Settings, session_id: str | None = None) -> ToolCont
     )
 
 
-def build_executor(settings: Settings, audit: AuditLog | None = None) -> ToolExecutor:
+def build_executor(
+    settings: Settings, audit: AuditLog | None = None, events: Any = None
+) -> ToolExecutor:
     return ToolExecutor(
         registry=build_registry(settings),
         policy=build_policy(settings),
         audit=audit,
+        events=events,
     )

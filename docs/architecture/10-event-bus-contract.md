@@ -1,6 +1,6 @@
 # The AURA Event Bus — contract and invariants
 
-Status: **implemented (10A.1 bus, 10A.2 transport)** · Date: 2026-09-09
+Status: **implemented (10A.1 bus · 10A.2 transport · 10A.3 catalog)** · Date: 2026-09-09
 
 > This document is the contract. Phase 10B, 10C and 10D all hang off it, and
 > the invariants below are what keep a web page from driving AURA. **If you are
@@ -255,6 +255,99 @@ reconnect with its stale `Last-Event-ID` and silently continue with a hole.
 forever and eventually lags, which looks like a bug in the bus rather than in
 the client that walked away.
 
+## 10b. The event catalog (10A.3)
+
+`core/event_catalog.py` is the contract; `core/emitter.py` is the only
+sanctioned publisher. A call site names *what happened*; origin, delivery and
+the payload schema come from the catalog, so a call site cannot publish screen
+content as trusted or make a permission request droppable.
+
+### Promotion is not log conversion
+
+AURA's structured logs are observability: they exist to explain a failure at
+2am, and nothing depends on their shape. The bus is an application contract.
+Deriving one from the other would mean editing a log line silently changes the
+contract, which is backwards. **Both are published at the same call site and
+neither reads the other**, asserted in both directions by tests.
+
+### Occurrence vs state
+
+| | Meaning | On reconnect | In SNAPSHOT |
+|---|---|---|---|
+| **OCCURRENCE** | Happened at an instant, and is over | Replayed with its **original `ts`** | **Never** |
+| **STATE** | A condition that persists | Recovered from the snapshot | Yes, via `snapshot_key` |
+
+`EventSpec.__post_init__` refuses an occurrence that declares a `snapshot_key`,
+and refuses a state event that does not. So "the wake word fired five minutes
+ago" cannot be reconstructed as "AURA is listening now" — the classification is
+enforced at import, not by convention.
+
+### The catalog
+
+| Event | Semantics | Origin | Delivery | Payload | Presence | Status |
+|---|---|---|---|---|---|---|
+| `SNAPSHOT` | state | core | reliable | `version, seq_at_snapshot, …` | yes | live |
+| `USER_SPOKE` | occurrence | user | reliable | `length, spoken` | yes | live |
+| `USER_INTERRUPTED` | occurrence | user | reliable | `method` | yes | live (client bridge) |
+| `TASK_STARTED` | occurrence | core | reliable | `kind, with_tools` | yes | live |
+| `TASK_COMPLETED` | occurrence | core | reliable | `kind, latency_ms, tool_calls` | yes | live |
+| `TASK_FAILED` | occurrence | core | reliable | `kind, error_type` | yes | live |
+| `AGENT_THINKING` | occurrence | core | droppable | `step` | yes | live |
+| `AGENT_WAITING` | occurrence | core | reliable | `reason, tool` | yes | live |
+| `PERMISSION_REQUIRED` | occurrence | core | reliable | `tool, level, summary` | yes | live |
+| `PRIVATE_MODE` | **state** | user | reliable | `mode, capturing` | yes | live |
+| `ERROR` | occurrence | core | reliable | `code` | yes | live |
+| `APP_CHANGED` | **state** | **observation** | droppable | `application` | yes | 10A.4 |
+| `FOCUS_MODE` | **state** | user | reliable | `enabled` | yes | 10A.4 |
+| `PRESENCE_STATE` | **state** | core | droppable | `state` | yes | 10A.4 |
+| `SPEECH_STARTED/_CHUNK/_ENDED` | occurrence | core | droppable | `length` / `text` / `completed` | yes | 10B |
+| `VLM_OBSERVATION` | occurrence | **observation** | droppable | `application, confidence` | no | 10C |
+| `RESOURCE_PRESSURE` | **state** | core | reliable | `level` | yes | 10C |
+
+Reserved slots carry a named owner (`deferred_10a4`, `deferred_10b`,
+`deferred_10c`) so a later milestone finds a contract rather than a blank.
+
+### Content policy
+
+**The bus carries no user content.** Not transcripts, not prompts, not replies,
+not screen text — only lengths, ids, tool names and modes. The presence layer
+does not need content to animate, and a bus that accumulates transcripts
+becomes the most sensitive object in the process for no benefit.
+
+Two deliberate exceptions, each with a reason:
+
+- **`PERMISSION_REQUIRED.summary`** carries the tool *and its arguments*:
+  `write_file(content='hi', path='scratch.txt')`. Informed consent is
+  impossible without it — "click Send" is not a decision a person can make.
+  Truncated to 400 characters, because a dialog that scrolls is one nobody
+  reads.
+- **`SPEECH_CHUNK.text`** (10B) will carry AURA's own words, which is the
+  entire point: being able to read what she says when the audio is not
+  audible. Output, not captured input.
+
+`TASK_FAILED` carries the exception **type**, never its message — a message
+routinely quotes a path or a prompt fragment.
+
+### The client bridge
+
+The voice loop is a **separate process**, so wake-word detection and barge-in
+cannot reach the in-process bus. `POST /v1/events/client` is the narrow
+bridge — and narrow is the design:
+
+- only `user_spoke` and `user_interrupted` are accepted
+- **origin is forced to USER by the server**; a client cannot claim `CORE` or
+  `OBSERVATION`
+- delivery comes from the catalog, not the request
+- it takes a `length`, not text, so a transcript cannot be put on the bus
+
+It grants nothing. Per invariant I4 an event cannot cause a tool to run, so an
+authenticated client injecting one can at most make the avatar animate — and a
+caller holding the API token could already do far more through `/v1/chat`.
+
+**A constraint this places on 10D:** the cognitive model must not learn
+preferences from client-bridged events, for the same reason it must not learn
+from observations. Injected activity is not evidence.
+
 ## 11. Measured
 
 Measured on the target machine (RTX 5060 laptop, 24 logical cores):
@@ -270,6 +363,15 @@ Measured on the target machine (RTX 5060 laptop, 24 logical cores):
 | publish → consumer latency, p95 | 11.1 µs |
 | RSS added by a saturated bus (8 subscribers, full ring) | **+0.1 MB** |
 | Concurrent producers | 8 threads × 250 events: no duplicate, no skipped sequence |
+
+Promotion cost (10A.3):
+
+| Metric | Value |
+|---|---|
+| Emit via catalog + bus | 6.08 µs/event |
+| Emit with no bus wired (`NULL_EMITTER`) | 0.14 µs/event |
+| Added to a chat turn (4 events) | **24.3 µs** |
+| As a fraction of a measured 302 ms turn | **0.008%** |
 
 **Interpretation.** AURA's real event rate is single-digit to low-tens per
 second. At ~155,000 events/s with four subscribers, the bus is roughly four

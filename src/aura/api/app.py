@@ -25,6 +25,7 @@ from aura.api.schemas import (
     ApprovalRedeem,
     ChatRequest,
     ChatResponse,
+    ClientEvent,
     EStopRequest,
     EvidenceOut,
     FactExplanation,
@@ -47,6 +48,7 @@ from aura.api.schemas import (
     VisionModeRequest,
 )
 from aura.config import Settings, get_settings
+from aura.core.emitter import EventEmitter
 from aura.core.events import EventBus
 from aura.core.orchestrator import Orchestrator
 from aura.core.types import GenerationParams
@@ -115,24 +117,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         token = load_or_create_token(cfg.security.resolved_token_file(), cfg.security.api_token)
 
+        # One bus per process, one emitter over it. Built before the
+        # subsystems so they can be handed it at construction rather than
+        # having it injected later, which would leave a window where events
+        # are silently dropped.
+        bus = EventBus()
+        emitter = EventEmitter(bus)
+
         tools = None
         runner = None
         if cfg.tools.enabled:
             from aura.tools.factory import build_context, build_executor
             from aura.tools.runner import ExecutorToolRunner
 
-            tools = build_executor(cfg, audit)
+            tools = build_executor(cfg, audit, events=emitter)
             runner = ExecutorToolRunner(tools, build_context(cfg))
 
         app.state.aura = AppState(
             settings=cfg,
             store=store,
             audit=audit,
-            orchestrator=Orchestrator(cfg, provider, store, audit, tools=runner),
+            orchestrator=Orchestrator(
+                cfg, provider, store, audit, tools=runner, events=emitter
+            ),
+            events=bus,
             token=token,
             started_at=time.time(),
             tools=tools,
         )
+
+        # The vision service is a process-wide singleton (one policy, one
+        # answer). Attach the emitter here so a mode change announces itself
+        # however it was triggered -- CLI, API, or the stop_looking tool.
+        if cfg.vision.mode is not None:
+            try:
+                from aura.vision.service import get_vision
+
+                get_vision(cfg).events = emitter
+            except Exception as exc:
+                log.debug("events.vision_not_wired", error=str(exc))
 
         health = await provider.health()
         log.info(
@@ -708,6 +731,26 @@ def _install_routes(app: FastAPI) -> None:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.post("/v1/events/client", tags=["events"])
+    async def publish_client_event(
+        body: ClientEvent, state: AppState = Depends(get_state)
+    ) -> dict[str, Any]:
+        """Bridge an occurrence from a client process onto the bus.
+
+        Exists because the voice loop is a separate process: wake-word
+        detection and barge-in happen there and cannot reach Core's in-process
+        bus. Deliberately not a general publish endpoint -- see ClientEvent.
+
+        **Origin is forced to USER here.** A client cannot label anything CORE
+        or OBSERVATION, so it cannot forge a trusted or an untrusted event.
+        """
+        emitter = EventEmitter(state.events)
+        if body.type == "user_spoke":
+            emitter.user_spoke("x" * body.length, spoken=body.spoken)
+        else:
+            emitter.user_interrupted(body.method or "unknown")
+        return {"accepted": True, "seq": state.events.seq}
 
     @app.post("/v1/approvals/{approval_id}", tags=["events"])
     async def redeem_approval(

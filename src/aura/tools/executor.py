@@ -24,12 +24,13 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Any
 
+from aura.core.emitter import NULL_EMITTER, EventEmitter
 from aura.logging import get_logger
 from aura.security.audit import AuditLog
 from aura.security.permissions import Decision, PermissionPolicy
 from aura.tools.base import Tool
 from aura.tools.registry import ToolNotFoundError, ToolRegistry
-from aura.tools.types import ToolCall, ToolContext, ToolResult
+from aura.tools.types import ToolCall, ToolContext, ToolResult, ToolSpec
 from aura.tools.validate import validate_arguments
 
 log = get_logger(__name__)
@@ -44,10 +45,16 @@ class ToolExecutor:
         policy: PermissionPolicy,
         audit: AuditLog | None = None,
         max_workers: int = 4,
+        events: EventEmitter | None = None,
     ) -> None:
         self._registry = registry
         self._policy = policy
         self._audit = audit
+        # Phase 10A.3. Announces that a human is needed. It does NOT issue an
+        # approval or wait for one -- the executor still refuses immediately,
+        # exactly as before. Wiring the issue-approve-resume loop changes the
+        # agent's control flow and belongs to 10C.
+        self._events = events or NULL_EMITTER
         # Tools are blocking and CPU- or IO-bound. A small pool bounds how many
         # can be in flight, and gives the timeout something to abandon.
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="aura-tool")
@@ -114,6 +121,13 @@ class ToolExecutor:
                 "Re-send the call with confirmed=true once a human has approved it.",
                 decision="confirm",
             )
+            self._events.permission_required(
+                tool=spec.name,
+                level=int(spec.level),
+                summary=_describe(call, spec),
+                session_id=ctx.session_id,
+            )
+            self._events.agent_waiting("confirmation", spec.name, session_id=ctx.session_id)
             await self._record(call, result, spec.level)
             return result
 
@@ -203,3 +217,24 @@ class ToolExecutor:
                 "confirmed": call.confirmed,
             },
         )
+
+
+def _describe(call: ToolCall, spec: ToolSpec) -> str:
+    """A one-line summary a person can actually decide on.
+
+    "click_element" is not a decision; "click_element(name='Send')" is. The
+    arguments are what make consent informed, so they are included here even
+    though no other event carries tool arguments -- see the PERMISSION_REQUIRED
+    entry in event_catalog.py for why this is the one deliberate exception.
+
+    Values are truncated: an argument can be a whole file's contents, and a
+    confirmation dialog that scrolls is one nobody reads.
+    """
+    parts: list[str] = []
+    for key, value in sorted(call.arguments.items()):
+        text = str(value)
+        if len(text) > 60:
+            text = text[:57] + "..."
+        parts.append(f"{key}={text!r}")
+    args = ", ".join(parts)
+    return f"{spec.name}({args})" if args else spec.name

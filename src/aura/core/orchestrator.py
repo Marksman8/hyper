@@ -26,6 +26,7 @@ from typing import Any
 
 from aura.config import Settings
 from aura.core.agent import AgentLoop, AgentOutcome
+from aura.core.emitter import NULL_EMITTER, EventEmitter
 from aura.core.types import (
     ChatChunk,
     Evidence,
@@ -73,6 +74,7 @@ class Orchestrator:
         store: MemoryStore,
         audit: AuditLog,
         tools: Any = None,
+        events: EventEmitter | None = None,
     ) -> None:
         self._settings = settings
         self._provider = provider
@@ -92,6 +94,9 @@ class Orchestrator:
             self._extractor = FactExtractor(provider, store)
         self._learning: set[asyncio.Task[None]] = set()
         self._last_user_turn_id: str | None = None
+        # Phase 10A.3. NULL_EMITTER when no bus is wired, so nothing here has
+        # to check whether anyone is listening.
+        self._events = events or NULL_EMITTER
 
     @property
     def provider(self) -> LLMProvider:
@@ -297,9 +302,14 @@ class Orchestrator:
             params = await self._personalise(params)
         started = time.perf_counter()
 
+        self._events.user_spoke(user_text, spoken=spoken, session_id=session.id)
+        self._events.task_started("chat", session_id=session.id)
+        self._events.agent_thinking(session_id=session.id)
+
         try:
             result = await self._provider.chat(messages, params)
         except Exception as exc:
+            self._events.task_failed("chat", exc, session_id=session.id)
             await self._record_failure(session.id, exc)
             raise
 
@@ -320,6 +330,12 @@ class Orchestrator:
                 # expect: thinking from a previous turn is not context.
                 metadata={"reasoning": result.reasoning} if result.reasoning else {},
             )
+        )
+        self._events.task_completed(
+            "chat",
+            latency_ms=latency_ms,
+            reply_length=len(result.content),
+            session_id=session.id,
         )
         self._learn_later(session.id, user_text, result.content)
         await self._audit.record(
@@ -390,13 +406,26 @@ class Orchestrator:
         # is a decision, and creativity there produces malformed calls.
         tool_params = (params or self._default_params()).merged(temperature=cfg.tool_temperature)
 
+        self._events.user_spoke(user_text, spoken=spoken, session_id=session.id)
+        self._events.task_started("agent", with_tools=True, session_id=session.id)
+        self._events.agent_thinking(session_id=session.id)
+
         try:
             outcome: AgentOutcome = await loop.run(
                 messages, tool_params, should_stop=lambda: self._estop
             )
         except Exception as exc:
+            self._events.task_failed("agent", exc, session_id=session.id)
             await self._record_failure(session.id, exc)
             raise
+
+        self._events.task_completed(
+            "agent",
+            latency_ms=outcome.latency_ms,
+            tool_calls=outcome.tool_calls_made,
+            reply_length=len(outcome.content),
+            session_id=session.id,
+        )
 
         await self._store.add_turn(
             Turn(
@@ -479,6 +508,11 @@ class Orchestrator:
         session, messages = await self._open_turn(session_id, user_text, spoken=spoken)
         params = await self._personalise(params)
         started = time.perf_counter()
+
+        self._events.user_spoke(user_text, spoken=spoken, session_id=session.id)
+        self._events.task_started("stream", session_id=session.id)
+        self._events.agent_thinking(session_id=session.id)
+
         collected: list[str] = []
         reasoning: list[str] = []
         usage = Usage()
@@ -498,6 +532,7 @@ class Orchestrator:
         except asyncio.CancelledError:
             # Client disconnected. Keep what was already generated: the user
             # may have read it, so it is part of the conversation.
+            self._events.task_failed("stream", asyncio.CancelledError(), session_id=session.id)
             await self._persist_assistant(
                 session.id,
                 "".join(collected),
@@ -508,6 +543,7 @@ class Orchestrator:
             )
             raise
         except Exception as exc:
+            self._events.task_failed("stream", exc, session_id=session.id)
             await self._persist_assistant(
                 session.id,
                 "".join(collected),
@@ -527,6 +563,12 @@ class Orchestrator:
                 finish_reason,
                 started,
                 reasoning="".join(reasoning),
+            )
+            self._events.task_completed(
+                "stream",
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                reply_length=sum(len(c) for c in collected),
+                session_id=session.id,
             )
             # Only on the success path. A cancelled or failed generation is a
             # half-finished exchange, and inferring durable preferences from

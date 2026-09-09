@@ -250,6 +250,32 @@ class ToolCallResponse(BaseModel):
     decision: str = "allow"
 
 
+class ClientEvent(BaseModel):
+    """An occurrence that happened in a client process (Phase 10A.3).
+
+    The voice loop runs as a SEPARATE PROCESS, so wake-word detection and
+    barge-in cannot reach Core's in-process bus directly. This is the narrow
+    bridge, and it is narrow on purpose:
+
+    * only the types in CLIENT_PUBLISHABLE are accepted
+    * origin is forced to USER by the server -- a client cannot claim CORE
+    * delivery comes from the catalog, not from the request
+    * the payload is bounded and carries no transcript
+
+    It is not a general publish endpoint, and it grants nothing: per invariant
+    I4 an event cannot cause a tool to run, so an authenticated client
+    injecting one can at most make the avatar animate. A caller that holds the
+    API token could already do far more through /v1/chat.
+    """
+
+    type: Literal["user_spoke", "user_interrupted"]
+    # Length rather than text: the bus carries no transcripts (see
+    # event_catalog.py). A client that sent one would have it ignored.
+    length: int = Field(default=0, ge=0, le=100_000)
+    method: str = Field(default="", max_length=32)
+    spoken: bool = True
+
+
 class ApprovalRedeem(BaseModel):
     """Grant or deny a pending permission request (Phase 10A.2).
 
