@@ -31,6 +31,7 @@ from aura.api.schemas import (
     FactExplanation,
     FactIn,
     FactOut,
+    FocusModeRequest,
     OpenAIChatRequest,
     ProfileDimension,
     ProfileOut,
@@ -89,6 +90,7 @@ class AppState:
     events: EventBus = field(default_factory=EventBus)
     approvals: ApprovalRegistry = field(default_factory=ApprovalRegistry)
     presence: Any = None
+    watcher: Any = None
 
 
 def get_state(request: Request) -> AppState:
@@ -166,6 +168,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         await presence.start()
 
+        # The APP_CHANGED producer. Optional: it needs pywin32, and a machine
+        # without the vision extra should still get everything else.
+        watcher = None
+        try:
+            from aura.vision.service import get_vision
+            from aura.vision.watcher import WindowWatcher
+
+            watcher = WindowWatcher(emitter, get_vision(cfg).policy)
+            await watcher.start()
+            app.state.aura.watcher = watcher
+            log.info("aura.window_watcher_started")
+        except Exception as exc:
+            log.info("aura.window_watcher_unavailable", error=str(exc))
+
         health = await provider.health()
         log.info(
             "aura.started",
@@ -183,6 +199,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             # Presence first: it holds a subscription, and the bus's drain
             # should not be waiting on a consumer that is about to stop.
+            if watcher is not None:
+                await watcher.stop()
             await presence.stop()
             await bus.aclose(drain_timeout=1.0)
             if tools is not None:
@@ -294,6 +312,12 @@ def _snapshot_provider(state: AppState) -> Any:
     presence = (
         state.presence.machine.snapshot() if state.presence is not None else {}
     )
+    # APP_CHANGED is catalogued as STATE owning `foreground_application`. A
+    # state event that never reaches the snapshot is not recoverable, and a
+    # client that reconnects has no way to learn it -- which is the whole
+    # difference between STATE and OCCURRENCE.
+    foreground = getattr(state.watcher, "current", "") if state.watcher else ""
+    
 
     def provider() -> dict[str, Any]:
         return {
@@ -302,6 +326,7 @@ def _snapshot_provider(state: AppState) -> Any:
             "emergency_stop": emergency,
             "vision_mode": vision_mode,
             "started_at": state.started_at,
+            "foreground_application": foreground,
             # Requirement 10: a client recovers by being told what is TRUE NOW,
             # never by replaying the occurrences that produced it.
             **presence,
@@ -751,6 +776,21 @@ def _install_routes(app: FastAPI) -> None:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.post("/v1/focus", tags=["control"])
+    async def set_focus_mode(
+        body: FocusModeRequest, state: AppState = Depends(get_state)
+    ) -> dict[str, Any]:
+        """Quieter, not less capable.
+
+        Audited because it changes how much AURA interrupts, which is the kind
+        of setting a person will later wonder about having changed.
+        """
+        EventEmitter(state.events).focus_mode(enabled=body.enabled)
+        await state.audit.record(
+            actor="user", action="control.focus_mode", detail={"enabled": body.enabled}
+        )
+        return {"focus_mode": body.enabled}
 
     @app.post("/v1/events/client", tags=["events"])
     async def publish_client_event(

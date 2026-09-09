@@ -159,13 +159,16 @@ idle. Reported as such rather than as a better number than was actually taken.
 
 1. **Subtitle is static.** `set_subtitle()` exists and renders, but nothing
    drives it — `SPEECH_*` events are 10B.
-2. **No system tray icon.** The overlay is closed by killing the process; there
-   is no menu to quit, hide, or pin from.
-3. **`APP_CHANGED` is never published**, so trigger 1 cannot fire yet. The
-   controller handles it; the producer is 10A's `WindowWatcher`, which is not
-   built — it needs a foreground-window poll in Core.
-4. **`FOCUS_MODE` is never published** either. The controller honours it; no
-   API sets it.
+2. ~~No system tray icon.~~ **Closed in 10A.12** — show/hide, focus toggle,
+   quit. Hiding is local presentation only and deliberately does not touch
+   privacy mode: conflating them would let a cosmetic click silently change a
+   security setting. Showing is refused while PRIVATE or SLEEP.
+3. ~~`APP_CHANGED` is never published.~~ **Closed in 10A.12** —
+   `vision/watcher.py` polls at 1 Hz, carries the process name only, and stops
+   entirely in PRIVATE/SLEEP rather than polling and withholding.
+4. ~~`FOCUS_MODE` is never published.~~ **Closed in 10A.12** — `POST /v1/focus`,
+   audited, in the snapshot. Set from the tray by authenticated POST, never by
+   publishing to the bus.
 5. **The mask is rectangular**, so a small transparent margin around the avatar
    is draggable rather than click-through.
 6. **Single monitor assumed for placement.** `QApplication.primaryScreen()` is

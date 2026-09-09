@@ -211,12 +211,18 @@ class PresenceStateMachine:
         self._entered_at = self._clock()
         self._last_activity = self._clock()
         self._transitions = 0
+        # Presentation intensity, not a state. See _apply.
+        self._focus_mode = False
 
     # -- introspection -------------------------------------------------------
 
     @property
     def state(self) -> PresenceState:
         return self._state
+
+    @property
+    def focus_mode(self) -> bool:
+        return self._focus_mode
 
     @property
     def transition_count(self) -> int:
@@ -360,6 +366,13 @@ class PresenceStateMachine:
             else:
                 self._flash(PresenceState.ERROR, code or "error")
 
+        elif kind is EventType.FOCUS_MODE:
+            # Focus is NOT a presence state: AURA is still working, still
+            # listening, still whatever she was. It changes how loudly that is
+            # presented, which is the presentation layer's business. Recorded
+            # here only so the snapshot can carry it.
+            self._focus_mode = bool(payload.get("enabled"))
+
         elif kind is EventType.PRIVATE_MODE:
             mode = str(payload.get("mode", ""))
             if mode == "private":
@@ -466,6 +479,7 @@ class PresenceStateMachine:
                 "presence_state": str(self._state),
                 "since": round(now - self._entered_at, 3),
                 "conditions": [str(self._state)],
+                "focus_mode": self._focus_mode,
             }
         return {
             "presence_state": str(self._state),
@@ -473,6 +487,7 @@ class PresenceStateMachine:
             "conditions": [
                 str(c.state) for c in self._conditions.values() if c.active(now)
             ],
+            "focus_mode": self._focus_mode,
         }
 
     def reset(self) -> None:

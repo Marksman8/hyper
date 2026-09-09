@@ -26,6 +26,7 @@ from aura.presence.avatar.silhouette import SilhouetteAvatar
 from aura.presence.client import CoreEventClient
 from aura.presence.overlay import PresenceOverlay
 from aura.presence.placement import Anchor, MoveReason, PlacementPolicy, Screen
+from aura.presence.tray import PresenceTray
 
 log = get_logger(__name__)
 
@@ -56,6 +57,11 @@ class PresenceController(QObject):
         self._state = PresenceState.IDLE
         self._focus_mode = False
         self._connected = False
+        # A LOCAL "get out of my way". Deliberately separate from PRIVATE:
+        # conflating them would let a cosmetic tray click silently change a
+        # privacy setting.
+        self._user_hidden = False
+        self.tray: Any = None
 
         overlay.dragged.connect(self._on_dragged)
 
@@ -83,8 +89,9 @@ class PresenceController(QObject):
         if kind == "snapshot":
             # Requirement 10: recover from what is TRUE NOW.
             self._apply_state(str(body.get("presence_state", "idle")), immediate=True)
-            if body.get("focus_mode"):
-                self._set_focus_mode(True)
+            # Both directions: a reconnect must be able to turn focus OFF too,
+            # or the overlay stays dimmed after Core says it is finished.
+            self._set_focus_mode(bool(body.get("focus_mode")))
             return
 
         if kind == "presence_state":
@@ -112,12 +119,14 @@ class PresenceController(QObject):
         if state in HIDDEN:
             self._overlay.hide()
             log.info("presence.hidden", state=str(state))
+            self._sync_tray()
             return
 
         self._overlay.set_state(state, immediate=immediate)
-        if not self._overlay.isVisible():
+        if not self._overlay.isVisible() and not self._user_hidden:
             self._overlay.show()
         self._consider_move(MoveReason.NEEDS_ATTENTION)
+        self._sync_tray()
 
     def _set_focus_mode(self, enabled: bool) -> None:
         """Minimised and quiet, but still capable. Focus reduces intrusion, it
@@ -126,7 +135,33 @@ class PresenceController(QObject):
             return
         self._focus_mode = enabled
         self._overlay.setWindowOpacity(self._focus_dim if enabled else 1.0)
+        if self.tray is not None:
+            self.tray.set_focus_checked(enabled)
         log.info("presence.focus_mode", enabled=enabled)
+
+    def toggle_visible(self) -> None:
+        """Tray click. Local only -- it does not touch privacy mode.
+
+        While PRIVATE or SLEEP, showing is refused: the user asked not to be
+        observed, and a tray click is not a withdrawal of that.
+        """
+        if self._overlay.isVisible():
+            self._user_hidden = True
+            self._overlay.hide()
+        elif self._state in HIDDEN:
+            log.info("presence.show_refused", state=str(self._state))
+        else:
+            self._user_hidden = False
+            self._overlay.show()
+        self._sync_tray()
+
+    def _sync_tray(self) -> None:
+        if self.tray is None:
+            return
+        from aura.presence.avatar.silhouette import PALETTE
+
+        self.tray.set_visible_label(overlay_visible=self._overlay.isVisible())
+        self.tray.set_state_colour(PALETTE.get(self._state, (110, 125, 150)))
 
     def on_connection(self, connected: bool) -> None:
         self._connected = connected
@@ -214,6 +249,12 @@ def run(cursor_awareness: bool | None = None, anchor: str = "bottom_right") -> i
     controller.place_initial()
     overlay.show()
 
+    tray = PresenceTray()
+    controller.tray = tray
+    tray.toggle_visible.connect(controller.toggle_visible)
+    tray.quit_requested.connect(app.quit)
+    tray.show()
+
     client = CoreEventClient()
     client.received.connect(controller.on_event)
     client.connected.connect(controller.on_connection)
@@ -232,4 +273,5 @@ def run(cursor_awareness: bool | None = None, anchor: str = "bottom_right") -> i
     finally:
         client.stop()
         client.wait(2000)
+        tray.hide()
         log.info("presence.stopped")

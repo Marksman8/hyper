@@ -228,6 +228,26 @@ class EventEmitter:
             {"state": state, "previous": previous, "cause": cause},
         )
 
+    def focus_mode(self, *, enabled: bool) -> None:
+        """Focus mode changed (10A.4 slot, wired in 10A.12).
+
+        STATE, so it reaches a reconnecting client through the snapshot rather
+        than by replaying the moment it was toggled.
+        """
+        self._emit(EventType.FOCUS_MODE, {"enabled": enabled})
+
+    def app_changed(self, application: str) -> None:
+        """The foreground application changed.
+
+        `Origin.OBSERVATION`, set by the catalog: this is read from the
+        environment, so a consumer must treat it as data. It is used to decide
+        where the avatar sits and for nothing else.
+
+        Carries the PROCESS NAME only. A window title quotes document names and
+        message subjects, and belongs nowhere near a bus.
+        """
+        self._emit(EventType.APP_CHANGED, {"application": application})
+
     # -- system --------------------------------------------------------------
 
     def error(self, code: str, *, detail: str = "", session_id: str | None = None) -> None:

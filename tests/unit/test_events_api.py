@@ -504,3 +504,77 @@ async def test_a_bridged_event_carries_no_transcript(client: AsyncClient) -> Non
 
     assert payload["length"] == 40
     assert "hunter2" not in str(payload)
+
+
+# ===========================================================================
+# SNAPSHOT COMPLETENESS (10A.12)
+# ===========================================================================
+
+
+async def test_the_snapshot_carries_every_declared_state_field(
+    client: AsyncClient,
+) -> None:
+    """The test that would have caught a real bug.
+
+    `event_catalog.py` declares which STATE events own which snapshot fields.
+    A field that is declared but never populated makes that event
+    unrecoverable on reconnect -- which is the entire difference between STATE
+    and OCCURRENCE. `foreground_application` was exactly this: APP_CHANGED
+    claimed it, and the snapshot never carried it.
+    """
+    from aura.core.event_catalog import live_snapshot_keys
+
+    payload = await _snapshot_payload(client)
+
+    # Live types only: a deferred slot (RESOURCE_PRESSURE, 10C) declares a
+    # field with no producer yet, which is a reserved contract rather than an
+    # oversight. Found by this very test on its first run.
+    missing = [field for field in live_snapshot_keys() if field not in payload]
+    assert not missing, (
+        f"declared but absent from the snapshot: {missing}. "
+        "A STATE event whose field never reaches the snapshot cannot be "
+        "recovered by a reconnecting client."
+    )
+
+
+async def test_focus_mode_round_trips_through_the_snapshot(
+    client: AsyncClient,
+) -> None:
+    assert (await _snapshot_payload(client))["focus_mode"] is False
+
+    resp = await client.post("/v1/focus", json={"enabled": True})
+    assert resp.status_code == 200
+    assert resp.json()["focus_mode"] is True
+
+    assert (await _snapshot_payload(client))["focus_mode"] is True
+
+
+async def test_focus_mode_is_audited(client: AsyncClient) -> None:
+    """It changes how much AURA interrupts -- the kind of setting someone will
+    later wonder about having changed."""
+    await client.post("/v1/focus", json={"enabled": True})
+    entries = (await client.get("/v1/audit")).json()
+    assert any(e["action"] == "control.focus_mode" for e in entries)
+
+
+async def test_the_focus_endpoint_requires_authentication(
+    api_settings: Settings,
+) -> None:
+    app = create_app(api_settings)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://aura.test"
+        ) as anon:
+            assert (await anon.post("/v1/focus", json={"enabled": True})).status_code == 401
+
+
+async def _snapshot_payload(client: AsyncClient) -> dict:
+    """Open a stream, read the SNAPSHOT frame, return its payload."""
+    from aura.api.app import _snapshot_provider
+    from aura.api.events_route import open_stream
+
+    state = _state(client)
+    sub, first = open_stream(state.events, None, _snapshot_provider(state))
+    state.events.unsubscribe(sub)
+    assert first is not None
+    return dict(first.payload)

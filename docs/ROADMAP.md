@@ -341,8 +341,16 @@ resolution (10A.4), and the desktop overlay (10A.5-10A.11). Contracts:
 `docs/architecture/10-event-bus-contract.md`,
 `11-presence-state-machine.md`, `12-presence-overlay.md`.
 
-Three gaps remain before 10A is frozen: the `APP_CHANGED` producer, the
-`FOCUS_MODE` control path, and a system tray icon.
+**10A is complete.** The three closing gaps landed in 10A.12: the
+`APP_CHANGED` producer (a foreground-window watcher that carries the process
+name only, and stops entirely in PRIVATE/SLEEP), the `FOCUS_MODE` control path
+(`POST /v1/focus`, audited, carried in the snapshot), and a system tray icon
+(show/hide, focus toggle, quit).
+
+10A.12 also fixed a contract violation the new snapshot-completeness test
+caught: `APP_CHANGED` is catalogued as STATE owning `foreground_application`,
+and the snapshot never carried it -- so a reconnecting client could not recover
+it, which is the whole difference between STATE and OCCURRENCE.
 
 Structure, split because five pillars is five phases of work:
 

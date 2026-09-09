@@ -250,6 +250,18 @@ class ToolCallResponse(BaseModel):
     decision: str = "allow"
 
 
+class FocusModeRequest(BaseModel):
+    """Turn focus mode on or off (Phase 10A.12).
+
+    Focus reduces intrusion without reducing capability: AURA still listens,
+    still works, still answers. She is quieter about it. That is why it is not
+    a presence STATE -- she is not "in focus mode" instead of thinking, she is
+    thinking quietly.
+    """
+
+    enabled: bool
+
+
 class ClientEvent(BaseModel):
     """An occurrence that happened in a client process (Phase 10A.3).
 

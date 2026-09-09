@@ -396,6 +396,21 @@ def snapshot_keys() -> dict[str, EventType]:
     }
 
 
+def live_snapshot_keys() -> dict[str, EventType]:
+    """Snapshot fields that must be populated *today*.
+
+    A deferred slot (`RESOURCE_PRESSURE` for 10C) legitimately declares a field
+    with no producer behind it yet -- that is a reserved contract, not an
+    oversight. This is the subset a running AURA is obliged to carry, and a
+    test asserts the snapshot actually contains all of them.
+    """
+    return {
+        field: event_type
+        for field, event_type in snapshot_keys().items()
+        if not CATALOG[event_type].source.startswith("deferred")
+    }
+
+
 def live_types() -> tuple[EventType, ...]:
     """Types actually published as of 10A.3. The rest are reserved slots."""
     return tuple(t for t, s in CATALOG.items() if not s.source.startswith("deferred"))
