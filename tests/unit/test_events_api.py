@@ -434,13 +434,18 @@ async def test_a_client_can_bridge_a_voice_occurrence(client: AsyncClient) -> No
     """The voice loop is a separate process, so barge-in cannot reach the
     in-process bus any other way."""
     state = _state(client)
-    before = state.events.seq
+    sub, _ = state.events.subscribe()
 
     resp = await client.post(
         "/v1/events/client", json={"type": "user_interrupted", "method": "barge_in"}
     )
     assert resp.status_code == 200
-    assert state.events.seq == before + 1
+
+    # Not an exact seq delta: the presence driver reacts to this event and
+    # publishes a PRESENCE_STATE of its own, which is correct behaviour.
+    bridged = [e for e in sub._queue if e.type is EventType.USER_INTERRUPTED]
+    assert len(bridged) == 1
+    assert bridged[0].payload["method"] == "barge_in"
 
 
 async def test_a_client_cannot_forge_a_trusted_origin(client: AsyncClient) -> None:
@@ -453,7 +458,7 @@ async def test_a_client_cannot_forge_a_trusted_origin(client: AsyncClient) -> No
         "/v1/events/client",
         json={"type": "user_spoke", "length": 12, "origin": "core"},
     )
-    published = list(sub._queue)
+    published = [e for e in sub._queue if e.type is EventType.USER_SPOKE]
 
     assert len(published) == 1
     assert published[0].origin is Origin.USER, "a client forged a trusted origin"
@@ -493,7 +498,9 @@ async def test_a_bridged_event_carries_no_transcript(client: AsyncClient) -> Non
         "/v1/events/client",
         json={"type": "user_spoke", "length": 40, "text": "my password is hunter2"},
     )
-    payload = next(iter(sub._queue)).payload
+    payload = next(
+        e for e in sub._queue if e.type is EventType.USER_SPOKE
+    ).payload
 
     assert payload["length"] == 40
     assert "hunter2" not in str(payload)

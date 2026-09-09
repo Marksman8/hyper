@@ -51,6 +51,7 @@ from aura.config import Settings, get_settings
 from aura.core.emitter import EventEmitter
 from aura.core.events import EventBus
 from aura.core.orchestrator import Orchestrator
+from aura.core.presence import PresenceDriver
 from aura.core.types import GenerationParams
 from aura.errors import AuraError, AuthError, NotFoundError
 from aura.logging import (
@@ -87,6 +88,7 @@ class AppState:
     # Deliberately two separate objects: see docs/architecture/10-event-bus-contract.md
     events: EventBus = field(default_factory=EventBus)
     approvals: ApprovalRegistry = field(default_factory=ApprovalRegistry)
+    presence: Any = None
 
 
 def get_state(request: Request) -> AppState:
@@ -123,6 +125,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # are silently dropped.
         bus = EventBus()
         emitter = EventEmitter(bus)
+        # Derives the visible state from the event contract and publishes
+        # PRESENCE_STATE. Knows nothing about rendering; the overlay is just
+        # another subscriber.
+        presence = PresenceDriver(bus)
 
         tools = None
         runner = None
@@ -141,6 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 cfg, provider, store, audit, tools=runner, events=emitter
             ),
             events=bus,
+            presence=presence,
             token=token,
             started_at=time.time(),
             tools=tools,
@@ -157,6 +164,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             except Exception as exc:
                 log.debug("events.vision_not_wired", error=str(exc))
 
+        await presence.start()
+
         health = await provider.health()
         log.info(
             "aura.started",
@@ -172,6 +181,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            # Presence first: it holds a subscription, and the bus's drain
+            # should not be waiting on a consumer that is about to stop.
+            await presence.stop()
+            await bus.aclose(drain_timeout=1.0)
             if tools is not None:
                 tools.close()
             await provider.close()
@@ -277,6 +290,10 @@ def _snapshot_provider(state: AppState) -> Any:
 
     emergency = state.orchestrator.emergency_stop
     seq = state.events.seq
+    # Resolved out here: the provider runs under the publish lock.
+    presence = (
+        state.presence.machine.snapshot() if state.presence is not None else {}
+    )
 
     def provider() -> dict[str, Any]:
         return {
@@ -285,6 +302,9 @@ def _snapshot_provider(state: AppState) -> Any:
             "emergency_stop": emergency,
             "vision_mode": vision_mode,
             "started_at": state.started_at,
+            # Requirement 10: a client recovers by being told what is TRUE NOW,
+            # never by replaying the occurrences that produced it.
+            **presence,
         }
 
     return provider

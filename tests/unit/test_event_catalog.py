@@ -401,7 +401,9 @@ def test_the_emitter_is_the_only_publisher_outside_the_bus_and_transport() -> No
         if path in allowed:
             continue
         text = path.read_text(encoding="utf-8")
-        if ".publish(" in text or ("Event(" in text and "EventType." in text):
+        # Precise on purpose: an earlier version matched `asyncio.Event()` and
+        # flagged the presence driver, which does go through the emitter.
+        if "bus.publish(" in text or "Event(type=" in text:
             offenders.append(str(path.relative_to(SRC)))
 
     assert not offenders, (

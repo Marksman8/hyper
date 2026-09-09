@@ -214,6 +214,20 @@ class EventEmitter:
         drop that would actually matter."""
         self._emit(EventType.PRIVATE_MODE, {"mode": mode, "capturing": capturing})
 
+    # -- presentation ---------------------------------------------------------
+
+    def presence_state(self, state: str, previous: str, cause: str) -> None:
+        """The derived avatar state changed (10A.4).
+
+        Published by `PresenceDriver`, consumed by the presentation layer. The
+        state machine itself never touches the bus -- that separation is what
+        keeps the renderer replaceable.
+        """
+        self._emit(
+            EventType.PRESENCE_STATE,
+            {"state": state, "previous": previous, "cause": cause},
+        )
+
     # -- system --------------------------------------------------------------
 
     def error(self, code: str, *, detail: str = "", session_id: str | None = None) -> None:
