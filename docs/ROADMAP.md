@@ -332,7 +332,17 @@ personal cognitive model.
 
 Full design: `docs/architecture/09-phase10-presence.md` (revision 2).
 
-**Status: designed, not implemented. Awaiting authorisation at 10A.0.**
+**Status: 10A complete. 10B, 10C, 10D not started.**
+
+10A shipped in five steps: the event bus as a security contract (10A.1), SSE
+transport and the nonce-bound approval path (10A.2), the event catalog with
+occurrence-vs-state semantics (10A.3), the presence state machine as state
+resolution (10A.4), and the desktop overlay (10A.5-10A.11). Contracts:
+`docs/architecture/10-event-bus-contract.md`,
+`11-presence-state-machine.md`, `12-presence-overlay.md`.
+
+Three gaps remain before 10A is frozen: the `APP_CHANGED` producer, the
+`FOCUS_MODE` control path, and a system tray icon.
 
 Structure, split because five pillars is five phases of work:
 
@@ -369,6 +379,18 @@ co-resident; the ResourceGovernor evicts one to load the other.
 SNNs stay off the critical path with a written success criterion and a recorded
 prediction that they will lose to a time-bucketed Markov chain — the same
 discipline Phase 9 applied to genetic algorithms.
+
+---
+
+## Automation providers (n8n and successors)
+
+Not a phase. **ADR-0004** settles the security contract before any code exists:
+an automation backend is a *provider of capabilities*, and AURA's local,
+version-controlled manifest is the sole authority for permission levels. One
+workflow becomes one tool, through the existing `ToolExecutor` chokepoint, with
+no separate execution path.
+
+Deliberately not implemented. Recommended after 10C, on RAM grounds only.
 
 ---
 
