@@ -10,7 +10,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
@@ -22,6 +22,7 @@ from aura.api.schemas import (
     AgentRequest,
     AgentResponse,
     AgentStepOut,
+    ApprovalRedeem,
     ChatRequest,
     ChatResponse,
     EStopRequest,
@@ -46,6 +47,7 @@ from aura.api.schemas import (
     VisionModeRequest,
 )
 from aura.config import Settings, get_settings
+from aura.core.events import EventBus
 from aura.core.orchestrator import Orchestrator
 from aura.core.types import GenerationParams
 from aura.errors import AuraError, AuthError, NotFoundError
@@ -59,6 +61,7 @@ from aura.logging import (
 from aura.memory.store import MemoryStore
 from aura.models.registry import build_provider
 from aura.runtime.resources import snapshot
+from aura.security.approvals import ApprovalRegistry
 from aura.security.audit import AuditLog
 from aura.security.auth import load_or_create_token, verify_token
 
@@ -78,6 +81,10 @@ class AppState:
     token: str
     started_at: float
     tools: Any = None
+    # Phase 10A. One-way notification out; nonce-bound authority back in.
+    # Deliberately two separate objects: see docs/architecture/10-event-bus-contract.md
+    events: EventBus = field(default_factory=EventBus)
+    approvals: ApprovalRegistry = field(default_factory=ApprovalRegistry)
 
 
 def get_state(request: Request) -> AppState:
@@ -224,6 +231,40 @@ def _install_error_handlers(app: FastAPI) -> None:
 
 
 # -- routes ------------------------------------------------------------------
+
+
+def _snapshot_provider(state: AppState) -> Any:
+    """Build a snapshot provider for one subscriber.
+
+    **Runs under the bus's publish lock**, so it must not block, do I/O, or
+    publish. Anything that could be slow is resolved out here, when the closure
+    is built, rather than inside it.
+
+    In 10A.2 the snapshot is deliberately thin: presence state does not exist
+    until 10A.4, and inventing fields now would mean inventing their semantics
+    too. It grows as consumers arrive.
+    """
+    vision_mode = "unknown"
+    try:
+        from aura.vision.service import get_vision
+
+        vision_mode = str(get_vision(state.settings).policy.mode)
+    except Exception as exc:  # vision is optional; a snapshot must still work
+        log.debug("events.snapshot_vision_unavailable", error=str(exc))
+
+    emergency = state.orchestrator.emergency_stop
+    seq = state.events.seq
+
+    def provider() -> dict[str, Any]:
+        return {
+            "version": __version__,
+            "seq_at_snapshot": seq,
+            "emergency_stop": emergency,
+            "vision_mode": vision_mode,
+            "started_at": state.started_at,
+        }
+
+    return provider
 
 
 def _install_routes(app: FastAPI) -> None:
@@ -630,6 +671,82 @@ def _install_routes(app: FastAPI) -> None:
             directives=build_directives(user),
             other_facts=[f"{f.key}: {f.value}" for f in user.other_facts],
         )
+
+    # -- events (Phase 10A.2) -------------------------------------------------
+    #
+    # One-way out, nonce-bound authority back in. The stream cannot grant
+    # anything; the approval endpoint cannot publish anything. See
+    # docs/architecture/10-event-bus-contract.md sections 6 and 7.
+
+    @app.get("/v1/events", tags=["events"])
+    async def events(request: Request, state: AppState = Depends(get_state)) -> Any:
+        """Subscribe to AURA's event stream.
+
+        Resumable: send `Last-Event-ID` with the last sequence number seen. If
+        the gap is still in the replay buffer it is replayed; otherwise a
+        SNAPSHOT is sent first and the stream continues from that consistent
+        cut.
+        """
+        from aura.api.events_route import event_stream, open_stream, parse_last_event_id
+
+        last = parse_last_event_id(request.headers.get("last-event-id"))
+        sub, first = open_stream(state.events, last, _snapshot_provider(state))
+        log.info(
+            "events.stream_opened",
+            subscription=sub.id,
+            resumed_from=last,
+            snapshot=first is not None,
+        )
+        return StreamingResponse(
+            event_stream(state.events, sub, first, request),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                # Without this, a reverse proxy will buffer the stream and the
+                # overlay goes blank until enough bytes accumulate.
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/v1/approvals/{approval_id}", tags=["events"])
+    async def redeem_approval(
+        approval_id: str, body: ApprovalRedeem, state: AppState = Depends(get_state)
+    ) -> dict[str, Any]:
+        """Grant or deny a pending permission request.
+
+        **The only path by which authority flows back into AURA.** Requires the
+        nonce issued with the request and the request id it was bound to, so an
+        approval cannot be forged, replayed, or moved onto a different action.
+        """
+        from aura.security.permissions import Decision, PermissionLevel
+
+        result = state.approvals.redeem(
+            approval_id,
+            body.nonce,
+            body.request_id,
+            granted=body.granted,
+        )
+        # Audited at CRITICAL whatever the outcome: a refused or replayed
+        # approval is exactly the thing someone would want to find later.
+        await state.audit.record(
+            actor="user",
+            action="approval.redeem",
+            level=PermissionLevel.CRITICAL,
+            target=approval_id,
+            decision=Decision.ALLOW if result.granted else Decision.DENY,
+            detail={
+                "outcome": str(result.outcome),
+                "request_id": body.request_id,
+                "granted_flag": body.granted,
+            },
+        )
+        return {
+            "approval_id": approval_id,
+            "outcome": str(result.outcome),
+            "granted": result.granted,
+            "reason": result.reason,
+        }
 
     # -- control & observability ---------------------------------------------
 

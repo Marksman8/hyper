@@ -367,8 +367,8 @@ class EventBus:
             self._history.append(sealed)
             targets = list(self._subs.values())
             for sub in targets:
-                self._enqueue(sub)
-                sub._queue.append(sealed)
+                if self._accept(sub):
+                    sub._queue.append(sealed)
             wakes = [(sub, self._loops.get(sub.id)) for sub in targets]
 
         # Waking happens outside the lock: a subscriber's loop may be busy, and
@@ -378,21 +378,32 @@ class EventBus:
             self._wake(sub, loop)
         return sealed
 
-    def _enqueue(self, sub: Subscription) -> None:
+    def _accept(self, sub: Subscription) -> bool:
         """Make room in one subscriber's queue. Called under the lock.
 
-        Droppable events are evicted oldest-first. If nothing droppable remains,
-        the subscriber is marked lagged and closed -- it is never given a
-        truncated stream while believing it is complete.
+        Returns False when the event must not be queued for this subscriber.
+
+        Droppable events are evicted oldest-first. If nothing droppable
+        remains, the subscriber is marked lagged and closed -- it is never
+        given a truncated stream while believing it is complete.
+
+        **A lagged subscriber receives nothing further.** An earlier version
+        marked it lagged and then appended anyway, so its queue grew without
+        bound while it was already doomed -- a slow consumer became a memory
+        leak. It has been told it must resync; there is nothing to gain by
+        continuing to fill a queue it will never finish draining.
         """
+        if sub._lagged or sub._closed:
+            return False
+
         if len(sub._queue) < self._queue_size:
-            return
+            return True
 
         for index, queued in enumerate(sub._queue):
             if queued.delivery is Delivery.DROPPABLE:
                 del sub._queue[index]
                 sub.dropped += 1
-                return
+                return True
 
         # Every pending event is reliable. Dropping one would break the
         # guarantee, and blocking would back-pressure the orchestrator, so the
@@ -404,6 +415,7 @@ class EventBus:
             subscription=sub.id,
             pending_reliable=len(sub._queue),
         )
+        return False
 
     @staticmethod
     def _wake(sub: Subscription, loop: asyncio.AbstractEventLoop | None) -> None:

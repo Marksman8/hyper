@@ -774,3 +774,37 @@ def test_an_event_serialises_to_json_safe_values() -> None:
     assert round_tripped["origin"] == "core"
     assert round_tripped["delivery"] == "reliable"
     assert round_tripped["payload"]["nested"]["a"] == [1, 2, 3]
+
+
+async def test_a_lagged_subscriber_stops_accumulating() -> None:
+    """Found by the 10A.2 transport tests, not by design.
+
+    An earlier version marked a subscriber lagged and then appended anyway, so
+    its queue grew without bound while it was already doomed -- a slow consumer
+    became a memory leak. It has been told to resync; there is nothing to gain
+    by filling a queue it will never finish draining.
+    """
+    bus = EventBus(queue_size=4)
+    sub, _ = bus.subscribe()
+
+    for i in range(500):
+        bus.publish(_event(i=i, delivery=Delivery.RELIABLE))
+
+    assert sub.lagged
+    assert sub.pending == 4, "a lagged subscription kept queuing events"
+
+
+async def test_a_lagged_subscriber_still_delivers_what_it_managed_to_hold() -> None:
+    """The prefix it received is genuine, and it should see it before learning
+    the stream is incomplete."""
+    bus = EventBus(queue_size=4)
+    sub, _ = bus.subscribe()
+    for i in range(10):
+        bus.publish(_event(i=i, delivery=Delivery.RELIABLE))
+
+    got: list[Event] = []
+    with pytest.raises(SubscriberLaggedError):
+        async for event in sub:
+            got.append(event)
+
+    assert [e.payload["i"] for e in got] == [0, 1, 2, 3]

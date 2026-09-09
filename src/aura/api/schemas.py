@@ -250,6 +250,22 @@ class ToolCallResponse(BaseModel):
     decision: str = "allow"
 
 
+class ApprovalRedeem(BaseModel):
+    """Grant or deny a pending permission request (Phase 10A.2).
+
+    The nonce and request_id together bind this to the one request that asked.
+    Without them an approval could be forged, replayed, or moved onto a
+    different action -- the confused-deputy attack this whole path exists to
+    prevent.
+    """
+
+    nonce: str = Field(min_length=8, max_length=256)
+    request_id: str = Field(min_length=1, max_length=128)
+    # False records an explicit refusal, which also burns the approval: a user
+    # who said no must not have it replayed into a yes.
+    granted: bool = True
+
+
 class EStopRequest(BaseModel):
     engaged: bool
 

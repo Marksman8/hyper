@@ -1,6 +1,6 @@
 # The AURA Event Bus — contract and invariants
 
-Status: **implemented (10A.1)** · Date: 2026-09-09
+Status: **implemented (10A.1 bus, 10A.2 transport)** · Date: 2026-09-09
 
 > This document is the contract. Phase 10B, 10C and 10D all hang off it, and
 > the invariants below are what keep a web page from driving AURA. **If you are
@@ -209,8 +209,8 @@ finally:
 
 ## 10. Known limitations
 
-1. **In-process only.** Cross-process fan-out is SSE, arriving in 10A.2.
-   Until then, only Core-internal consumers exist.
+1. ~~In-process only.~~ **Resolved in 10A.2**: `GET /v1/events` fans out
+   over authenticated SSE, with `Last-Event-ID` resume.
 2. **Replay buffer is 256 events, not durable.** A restart loses history;
    reconnecting clients get a snapshot. Events are not an audit trail — the
    `audit` table is.
@@ -222,6 +222,38 @@ finally:
    only one event type out of thousands.
 6. **`aclose` drains on a 10 ms poll.** Adequate for shutdown; not a
    low-latency primitive.
+
+## 10a. The transport (10A.2)
+
+    GET  /v1/events            one-way, authenticated, resumable
+    POST /v1/approvals/{id}    the only way authority flows back
+
+Both live in `api/events_route.py` and `api/app.py`. The separation is
+deliberate: the stream has no way to grant anything, and the approval endpoint
+has no way to publish. A test asserts the second half of that directly.
+
+**Framing.** `id:` carries `seq`, which is what makes `Last-Event-ID` resume
+work. `event:` carries the type. `data:` is the JSON wire form, including
+`origin`, so a client can honour the trust label.
+
+**Heartbeats.** A `: keepalive` comment every 15 s, because idle SSE
+connections get closed by proxies and by Windows.
+
+**Why the stream pumps through a local queue.** Heartbeats need a timeout, and
+wrapping `anext()` on the subscription in `wait_for` cancels its async
+generator mid-await -- tearing it down and losing whatever was queued.
+Cancelling `Queue.get()` is safe, so a background pump feeds a local queue and
+the generator races that instead.
+
+**Lag is reported, not hidden.** A subscription that misses a reliable event
+gets a terminal `ERROR` frame carrying
+`{"code": "subscriber_lagged", "action": "resubscribe_without_last_event_id"}`.
+Simply closing the connection would be worse than useless: the client would
+reconnect with its stale `Last-Event-ID` and silently continue with a hole.
+
+**Every exit path unsubscribes.** A leaked subscription keeps receiving
+forever and eventually lags, which looks like a bug in the bus rather than in
+the client that walked away.
 
 ## 11. Measured
 
