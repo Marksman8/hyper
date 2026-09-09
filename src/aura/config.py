@@ -157,7 +157,17 @@ class LoggingConfig(_Section):
     format: Literal["console", "json"] = "console"
     file: str = "var/logs/aura.log"
     redact_keys: list[str] = Field(
-        default_factory=lambda: ["api_token", "api_key", "password", "secret", "token"]
+        # Matched exactly, not as substrings, so every new secret-bearing field
+        # has to be added here by hand. `auth_token` is the automation service
+        # shared secret (ADR-0004 D7).
+        default_factory=lambda: [
+            "api_token",
+            "api_key",
+            "password",
+            "secret",
+            "token",
+            "auth_token",
+        ]
     )
 
     def resolved_file(self) -> Path:
@@ -334,6 +344,30 @@ class ToolsConfig(_Section):
         return tuple(out)
 
 
+class AutomationConfig(_Section):
+    """Third-party automation (ADR-0004).
+
+    **Nothing here grants a permission.** Levels live in the manifest, which is
+    version-controlled and reviewable in a diff; this section only says which
+    provider to use and how to reach it. `enabled: false` is the default
+    because AURA must be fully functional with no automation backend at all.
+    """
+
+    enabled: bool = False
+    provider: str = "n8n"
+    # The authority. Relative paths resolve against the project root.
+    manifest_path: str = "config/workflows.yaml"
+    # Used only for the health check; each workflow carries its own full URL,
+    # so a manifest entry cannot be redirected by changing this.
+    base_url: str = "http://127.0.0.1:5678"
+    # A shared secret authenticating AURA *to* the automation service. Not a
+    # third-party credential -- those stay in n8n and never enter AURA (D7).
+    auth_header: str = "X-Aura-Token"
+    auth_token: str = ""
+    auth_token_file: str = "var/secrets/automation_token"  # noqa: S105  (a path)
+    verify_tls: bool = True
+
+
 class AgentConfig(_Section):
     """Phase 4. The budget the loop runs under."""
 
@@ -485,6 +519,7 @@ class Settings(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
+    automation: AutomationConfig = Field(default_factory=AutomationConfig)
     personalization: PersonalizationConfig = Field(
         default_factory=PersonalizationConfig
     )

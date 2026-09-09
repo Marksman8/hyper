@@ -863,6 +863,28 @@ def _install_routes(app: FastAPI) -> None:
         )
         return {"emergency_stop": body.engaged}
 
+    # -- automation -----------------------------------------------------------
+
+    @app.get("/v1/automation", tags=["automation"])
+    async def automation_status(state: AppState = Depends(get_state)) -> dict[str, Any]:
+        """What AURA is permitted to automate, and at what level.
+
+        **Read-only, and it stays that way** (ADR-0004 D12 rule 13). Declaring a
+        workflow means editing a version-controlled file, so that the answer to
+        "what can AURA do?" is always a diff. An endpoint that could write the
+        manifest would move that authority onto the network.
+        """
+        from aura.automation.factory import load_workflows
+        from aura.tools.automation import describe_workflows
+
+        cfg = state.settings.automation
+        return {
+            "enabled": cfg.enabled,
+            "provider": cfg.provider if cfg.enabled else None,
+            "manifest": cfg.manifest_path,
+            "workflows": describe_workflows(load_workflows(state.settings)),
+        }
+
     # -- vision ---------------------------------------------------------------
     #
     # The human half of the vision controls. The model gets tools that can only

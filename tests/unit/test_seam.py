@@ -107,3 +107,43 @@ def test_ocr_library_stays_behind_the_provider_seam() -> None:
         and "rapidocr_onnxruntime" in _imported_roots(path)
     ]
     assert not offenders, f"OCR backend imported outside vision/ocr/: {offenders}"
+
+
+# The same discipline again, for automation (ADR-0004 D10). AURA depends on an
+# abstract automation interface, not on n8n: webhooks, node types and execution
+# ids stay inside the provider, so replacing n8n with Node-RED, Windmill or
+# direct API calls is a provider swap rather than a rewrite of the tool layer.
+AUTOMATION_PKG = SRC / "automation"
+
+
+def test_the_automation_backend_stays_behind_its_seam() -> None:
+    """Only the automation package may name the concrete provider."""
+    offenders = [
+        str(path.relative_to(SRC))
+        for path in SRC.rglob("*.py")
+        if AUTOMATION_PKG not in path.parents
+        and any("automation.n8n" in module for module in _imported_roots_full(path))
+    ]
+    assert not offenders, f"the n8n provider leaked into: {offenders}"
+
+
+def test_the_workflow_tool_carries_no_transport() -> None:
+    """The tool holds a WorkflowSpec and an AutomationProvider. If it grew an
+    HTTP client it would have started deciding how execution happens, which is
+    the provider's job."""
+    imported = _imported_roots_full(SRC / "tools" / "automation.py")
+    for transport in ("httpx", "requests", "urllib", "aiohttp"):
+        assert transport not in imported
+
+
+def _imported_roots_full(path: Path) -> set[str]:
+    """Full dotted module names, unlike `_imported_roots` which keeps only the
+    first segment."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+        elif isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+    return modules

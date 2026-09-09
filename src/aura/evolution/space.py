@@ -176,6 +176,29 @@ FORBIDDEN: dict[str, str] = {
         "Same shape of trap: the suite does not measure personalisation, so "
         "disabling it is free score and a real regression."
     ),
+    "automation.manifest_path": (
+        "The manifest is the sole authority for what AURA may do with an "
+        "automation provider (ADR-0004 D2). Pointing the loader at a "
+        "different file would replace that authority with a search result."
+    ),
+    "automation.enabled": (
+        "Whether AURA can reach third-party services is a human decision, not "
+        "a parameter with an optimal value."
+    ),
+    "automation.provider": (
+        "Which external system executes on AURA's behalf is not a tuning knob."
+    ),
+    "automation.auth_token": "Authentication is not a performance parameter.",
+    "automation.auth_token_file": "Same: where the secret lives is not tunable.",
+    "automation.verify_tls": (
+        "Turning off certificate verification would make some failures "
+        "disappear, and a hill-climber would notice that before it noticed "
+        "why the check was there."
+    ),
+    "automation.base_url": (
+        "Redirecting automation at a different host is an egress decision a "
+        "person makes, in a diff."
+    ),
 }
 
 

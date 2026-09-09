@@ -1,15 +1,20 @@
 # ADR-0004: AURA owns permission authority for automation providers
 
-Status: **accepted (contract only — not implemented)** · 2026-09-09 ·
-Supersedes nothing
+Status: **accepted and implemented** · 2026-09-09 · Supersedes nothing
+
+> Implemented the same day it was accepted. The decisions below are unchanged;
+> `docs/architecture/13-automation.md` records what was built against them and
+> the one place the built thing differs from the sketch (D11 — no new event
+> types, and why).
 
 > **The permanent decision, in one line:**
 > **n8n is a provider of automation capabilities. AURA's local, version-controlled
 > manifest is the sole authority for what AURA is permitted to do with them.**
 
-This ADR settles the security contract *before* any code exists, so that the
-implementation cannot accidentally introduce an authority-escalation path. No
-n8n integration is built. Nothing in `src/` changed.
+This ADR settled the security contract *before* any code existed, so that the
+implementation could not accidentally introduce an authority-escalation path.
+The implementation followed; every rule below is now enforced by a test rather
+than by prose.
 
 ---
 

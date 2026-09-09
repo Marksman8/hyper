@@ -1,0 +1,84 @@
+# AURA workflow manifest — the authority for automation.
+#
+# ADR-0004. Read that before adding anything here.
+#
+# ---------------------------------------------------------------------------
+# WHAT THIS FILE IS
+# ---------------------------------------------------------------------------
+#
+# n8n describes what a workflow *is*. This file decides what AURA is *allowed
+# to do with it*. Nothing is discovered: a workflow that is not declared here
+# is not callable, no matter what n8n says it can do.
+#
+# That is deliberate friction. A workflow renamed from `draft_email` to
+# `send_email` in a browser does not change its authority here, which is the
+# entire reason the file exists.
+#
+# Each entry becomes exactly one tool. There is no `run_workflow(name)`,
+# because the model chooses arguments, and a workflow name as an argument
+# would let the model choose its own permission level.
+#
+# ---------------------------------------------------------------------------
+# FIELDS
+# ---------------------------------------------------------------------------
+#
+#   id            REQUIRED. Becomes the tool name. Letters, digits, underscore.
+#   description   REQUIRED. A sentence. This is how the model decides to call
+#                 it; a label like "slack" is not enough to choose on.
+#   webhook       REQUIRED. The full URL. Each entry carries its own, so
+#                 changing `automation.base_url` cannot redirect it.
+#   parameters    REQUIRED. JSON Schema. ToolExecutor validates against it
+#                 before anything runs — validation is the first stage of the
+#                 chokepoint, and an entry without a schema is unusable.
+#   level         REQUIRED. 1 READ · 2 ACT · 3 MUTATE · 4 CRITICAL.
+#                 Level 0 is rejected: calling an external system is never
+#                 "no side effects".
+#   confirm       `always` for anything a person must see before it happens.
+#   timeout_s     Default 30, maximum 300.
+#   idempotent    False if calling twice does something twice.
+#   reversible    False if you cannot undo it.
+#
+# Anything that sends, posts, publishes, pays, deletes or transfers is
+# LEVEL 4 with `confirm: always`. The loader refuses to start otherwise —
+# not as a courtesy, but because a level-2 declaration on a sending workflow
+# means its author has misunderstood what it does.
+#
+# ---------------------------------------------------------------------------
+# EXAMPLES — uncomment and adapt. Nothing is active until you do.
+# ---------------------------------------------------------------------------
+#
+# workflows:
+#   - id: daily_digest
+#     description: >-
+#       Summarise today's calendar events and unread mail into a short
+#       digest. Read-only; sends nothing.
+#     webhook: http://127.0.0.1:5678/webhook/digest
+#     parameters:
+#       type: object
+#       properties: {}
+#     level: 1
+#     timeout_s: 30
+#     idempotent: true
+#
+#   - id: post_to_team_chat
+#     description: >-
+#       Post a message to a team chat channel. Visible to other people and
+#       cannot be unsent.
+#     webhook: http://127.0.0.1:5678/webhook/team-chat
+#     parameters:
+#       type: object
+#       properties:
+#         channel:
+#           type: string
+#           description: Channel name, without the leading '#'.
+#         text:
+#           type: string
+#           maxLength: 4000
+#       required: [channel, text]
+#     level: 4
+#     confirm: always
+#     timeout_s: 20
+#     idempotent: false
+#     reversible: false
+
+workflows: []

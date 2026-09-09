@@ -68,7 +68,10 @@ logging:
   format: "console"          # console | json
   file: "var/logs/aura.log"
   # Redact these config keys anywhere they would be serialized.
-  redact_keys: ["api_token", "api_key", "password", "secret", "token"]
+  # Matched exactly, not as substrings, so every new secret-bearing field
+  # has to be added here by hand. This list OVERRIDES the one in config.py,
+  # so adding a key there alone does nothing.
+  redact_keys: ["api_token", "api_key", "password", "secret", "token", "auth_token"]
 
 persona:
   # v0.1 system prompt. Deliberately minimal - personality is a Phase 7 concern
@@ -166,3 +169,21 @@ personalization:
   # answer, but a wrong token limit truncates mid-sentence and you would have
   # no way to connect that to something you said weeks ago.
   adapt_parameters: true
+
+automation:
+  # ADR-0004. Off by default: AURA must be fully functional with no
+  # automation backend at all, so this is opt-in.
+  enabled: false
+  provider: "n8n"
+  # The authority for what AURA may do with a workflow. Permission levels come
+  # from this file and from nowhere else -- never from n8n's metadata, name or
+  # tags. An undeclared workflow is not callable.
+  manifest_path: "config/workflows.yaml"
+  # Health checks only. Each workflow carries its own full URL, so changing
+  # this cannot redirect a declared workflow somewhere else.
+  base_url: "http://127.0.0.1:5678"
+  # A shared secret authenticating AURA *to* n8n. Third-party credentials
+  # (Gmail, Slack) stay inside n8n and never enter AURA.
+  auth_header: "X-Aura-Token"
+  auth_token_file: "var/secrets/automation_token"
+  verify_tls: true

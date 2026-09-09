@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from aura.automation.factory import build_provider, load_workflows
 from aura.config import Settings
 from aura.logging import get_logger
 from aura.security.audit import AuditLog
 from aura.security.permissions import PermissionLevel, PermissionPolicy
 from aura.tools.applications import application_tools
+from aura.tools.automation import automation_tools
 from aura.tools.executor import ToolExecutor
 from aura.tools.filesystem import filesystem_tools
 from aura.tools.python_exec import python_tools
@@ -36,6 +38,11 @@ def build_registry(settings: Settings) -> ToolRegistry:
     # explains a refusal; withholding them in private mode would leave the
     # model unable to say why it cannot look.
     registry.register_all(vision_tools(settings))
+    # Declared workflows (ADR-0004). The manifest is read whether or not
+    # automation is enabled, so a broken manifest fails here at startup rather
+    # than halfway through an agent task. Nothing is registered when the
+    # provider is off.
+    registry.register_all(automation_tools(load_workflows(settings), build_provider(settings)))
     log.info("tools.registry_built", tools=registry.names())
     return registry
 

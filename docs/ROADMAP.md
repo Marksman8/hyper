@@ -392,13 +392,19 @@ discipline Phase 9 applied to genetic algorithms.
 
 ## Automation providers (n8n and successors)
 
-Not a phase. **ADR-0004** settles the security contract before any code exists:
-an automation backend is a *provider of capabilities*, and AURA's local,
-version-controlled manifest is the sole authority for permission levels. One
-workflow becomes one tool, through the existing `ToolExecutor` chokepoint, with
-no separate execution path.
+Not a phase. **ADR-0004** settles the security contract: an automation backend
+is a *provider of capabilities*, and AURA's local, version-controlled manifest
+is the sole authority for permission levels. One workflow becomes one tool,
+through the existing `ToolExecutor` chokepoint, with no separate execution path.
 
-Deliberately not implemented. Recommended after 10C, on RAM grounds only.
+**Implemented.** `config/workflows.yaml` is the authority, `AutomationProvider`
+is the seam, and `N8NProvider` is the one module that knows what n8n is. Off by
+default and registering nothing until a workflow is declared by hand. See
+`docs/architecture/13-automation.md`.
+
+n8n itself is not installed here, and its RAM cost is still unmeasured — the
+tool layer was the part with an architectural deadline, and it is done. Running
+an actual n8n instance is still recommended after 10C, on RAM grounds only.
 
 ---
 
