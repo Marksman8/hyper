@@ -158,7 +158,8 @@ idle. Reported as such rather than as a better number than was actually taken.
 ## 9. Known limitations
 
 1. **Subtitle is static.** `set_subtitle()` exists and renders, but nothing
-   drives it — `SPEECH_*` events are 10B.
+   drives it yet. The `SPEECH_*` events it needs now exist and are published
+   live (10B.1); wiring the panel to them is 10B.2.
 2. ~~No system tray icon.~~ **Closed in 10A.12** — show/hide, focus toggle,
    quit. Hiding is local presentation only and deliberately does not touch
    privacy mode: conflating them would let a cosmetic click silently change a

@@ -31,6 +31,7 @@ from aura.voice.audio.capture import Microphone, RingBuffer
 from aura.voice.audio.cues import dismiss_cue, follow_up_cue, wake_cue
 from aura.voice.audio.playback import Speaker
 from aura.voice.core_client import CoreClient, CoreUnavailableError
+from aura.voice.reporter import SpeechReporter
 from aura.voice.stt.base import STTProvider
 from aura.voice.tts.base import TTSProvider
 from aura.voice.tts.normalize import for_speech
@@ -142,6 +143,13 @@ class VoiceSession:
             start_timeout_s=self._cfg.listen_timeout_s,
         )
         self._barge = barge_in or BargeInDetector(sustain_s=self._cfg.barge_in_s)
+        # 10B.1. Speech becomes a bus event stream so it can be *seen* as well
+        # as heard. Off the speech path entirely -- see reporter.py.
+        self._reporter = SpeechReporter(core)
+        # True between SPEECH_STARTED and SPEECH_ENDED, so the end is published
+        # exactly once however the turn unwinds: finished, interrupted, or
+        # thrown out of.
+        self._speech_open = False
 
         self._state = VoiceState.SLEEP
         self._stop = threading.Event()
@@ -212,6 +220,7 @@ class VoiceSession:
         self._wake.load()
         self._endpointer.vad.load()
         self._mic.start()
+        self._reporter.start()
         self._set_state(VoiceState.SLEEP)
 
         try:
@@ -540,6 +549,12 @@ class VoiceSession:
             log.error("voice.turn_failed", error=str(exc), error_type=type(exc).__name__)
             self._on_text("system", f"error: {exc}")
         finally:
+            # In `finally` rather than at the end of the happy path, because
+            # every other way out of this method -- barge-in, Core dropping
+            # mid-reply, an unexpected exception -- also stops the audio, and a
+            # subtitle whose closing event depends on the turn ending tidily
+            # would sit on screen after the room went quiet.
+            self._end_speech(completed=not self._interrupt.is_set())
             self.timings = timings
             self._last_activity = time.monotonic()
             log.info(
@@ -578,20 +593,62 @@ class VoiceSession:
                     self._barge_threshold = 0.0
                     self._set_state(VoiceState.SPEAKING)
                     self._on_text("aura", text)
+                    self._begin_speech(len(text))
                 else:
                     self._on_text("aura", text)
+                # Published when the audio for this sentence starts, not when
+                # the sentence was synthesised: the subtitle should track what
+                # is being heard, and synthesis runs ahead of playback.
+                self._reporter.chunk(text)
             self._speaker.play(chunk)
         return produced
 
+    # -- speech lifecycle (10B.1) --------------------------------------------
+
+    def _begin_speech(self, length: int) -> None:
+        """SPEECH_STARTED, once per reply.
+
+        `length` is the FIRST SENTENCE, not the whole reply, and cannot be
+        anything else: the model is still generating when the mouth opens.
+        That is the price of streaming, and streaming is what meets the latency
+        budget. A consumer wanting the full text accumulates SPEECH_CHUNK.
+        """
+        if self._speech_open:
+            return
+        self._speech_open = True
+        self._reporter.started(length)
+
+    def _end_speech(self, *, completed: bool) -> None:
+        """SPEECH_ENDED, once, however the turn unwound.
+
+        Idempotent because the paths out of a turn are many -- finished,
+        barge-in, stop word, an exception, Core going away mid-reply -- and a
+        subtitle that never got its closing event stays on screen forever.
+        """
+        if not self._speech_open:
+            return
+        self._speech_open = False
+        self._reporter.ended(completed=completed)
+
     def _speak_now(self, text: str) -> None:
-        """Say something immediately, outside the normal turn flow."""
+        """Say something immediately, outside the normal turn flow.
+
+        Reported like any other speech. These are AURA's own words -- "Sorry, I
+        didn't catch that" is said out loud in the room -- and a subtitle that
+        showed only the replies routed through Core would silently omit exactly
+        the utterances a user is most likely to have missed.
+        """
         try:
             self._set_state(VoiceState.SPEAKING)
+            self._begin_speech(len(text))
+            self._reporter.chunk(text)
             for chunk in self._tts.synthesize(text):
                 self._speaker.play(chunk)
             self._speaker.wait_until_idle(timeout=10)
         except Exception as exc:
             log.error("voice.speak_failed", error=str(exc))
+        finally:
+            self._end_speech(completed=True)
 
     def _shutdown(self) -> None:
         self._interrupt.set()
@@ -601,6 +658,11 @@ class VoiceSession:
             worker.join(timeout=3.0)
         self._speaker.close()
         self._mic.stop()
+        # Before the client it posts through, and after the worker that feeds
+        # it: closing in the other order would strand a queued subtitle against
+        # a shut client and log a failure on every clean exit.
+        self._end_speech(completed=False)
+        self._reporter.close()
         self._core.close()
         self._set_state(VoiceState.SLEEP)
         log.info("voice.stopped", dropped_frames=self._mic.dropped_frames)

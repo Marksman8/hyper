@@ -263,29 +263,59 @@ class FocusModeRequest(BaseModel):
 
 
 class ClientEvent(BaseModel):
-    """An occurrence that happened in a client process (Phase 10A.3).
+    """An occurrence that happened in a client process (Phase 10A.3, 10B.1).
 
-    The voice loop runs as a SEPARATE PROCESS, so wake-word detection and
-    barge-in cannot reach Core's in-process bus directly. This is the narrow
-    bridge, and it is narrow on purpose:
+    The voice loop runs as a SEPARATE PROCESS -- audio devices and the GIL put
+    it there -- so wake-word detection, barge-in and speech playback cannot
+    reach Core's in-process bus directly. This is the narrow bridge, and it is
+    narrow on purpose:
 
-    * only the types in CLIENT_PUBLISHABLE are accepted
-    * origin is forced to USER by the server -- a client cannot claim CORE
+    * only the types listed below are accepted
+    * **origin comes from the event catalog, never from the request**
     * delivery comes from the catalog, not from the request
-    * the payload is bounded and carries no transcript
+    * every payload is bounded
 
-    It is not a general publish endpoint, and it grants nothing: per invariant
-    I4 an event cannot cause a tool to run, so an authenticated client
-    injecting one can at most make the avatar animate. A caller that holds the
-    API token could already do far more through /v1/chat.
+    **On origin, and why 10B.1 changed how this is phrased.** The rule used to
+    be "forced to USER". That was the right behaviour for the two events that
+    existed, and the wrong statement of the property. The property is that *a
+    client cannot choose an origin* -- the catalog decides, and the catalog is
+    a version-controlled local file, the same arrangement as the workflow
+    manifest in ADR-0004.
+
+    That distinction matters as soon as speech arrives. `USER_SPOKE` is a user
+    action and is catalogued `Origin.USER`. `SPEECH_CHUNK` is AURA's own
+    utterance and is catalogued `Origin.CORE`, because the voice loop is not a
+    third-party client -- it is AURA's mouth, running out-of-process for
+    hardware reasons. Labelling her own words `USER` would be a lie the
+    presence layer then acts on: `Origin.USER` means a human did something, and
+    it resets idle timers on that basis.
+
+    What that concedes: a caller holding the API token can now publish a
+    CORE-origin speech event, i.e. put words in a subtitle that AURA never
+    said. Bounded by invariant I4 -- an event cannot cause a tool to run -- and
+    dominated by the fact that the same token can make AURA genuinely say
+    anything through /v1/chat.
     """
 
-    type: Literal["user_spoke", "user_interrupted"]
-    # Length rather than text: the bus carries no transcripts (see
-    # event_catalog.py). A client that sent one would have it ignored.
+    type: Literal[
+        "user_spoke",
+        "user_interrupted",
+        "speech_started",
+        "speech_chunk",
+        "speech_ended",
+    ]
+    # Length rather than text, for the USER events: the bus carries no
+    # transcripts (see event_catalog.py). A client that sent one would have it
+    # ignored. `text` below is the deliberate exception, and it runs the other
+    # way -- it is AURA's output, not the user's captured input.
     length: int = Field(default=0, ge=0, le=100_000)
     method: str = Field(default="", max_length=32)
     spoken: bool = True
+    # SPEECH_CHUNK only. Capped here as well as in the emitter: the schema is
+    # what stops an oversized body being parsed at all.
+    text: str = Field(default="", max_length=1_000)
+    # SPEECH_ENDED only. Whether she finished or was cut off.
+    completed: bool = True
 
 
 class ApprovalRedeem(BaseModel):

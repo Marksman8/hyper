@@ -210,7 +210,7 @@ CATALOG: dict[EventType, EventSpec] = {
         sensitivity=Sensitivity.ACTIVITY,
         presence_relevant=True,
         snapshot_key="foreground_application",
-        source="deferred_10a4",
+        source="core",
         privacy_note=(
             "UNTRUSTED. Window titles quote document names and message "
             "subjects, so only the process name is carried, never the title."
@@ -276,7 +276,7 @@ CATALOG: dict[EventType, EventSpec] = {
         sensitivity=Sensitivity.METADATA,
         presence_relevant=True,
         snapshot_key="focus_mode",
-        source="deferred_10a4",
+        source="core",
     ),
     # -- presentation -------------------------------------------------------
     EventType.PRESENCE_STATE: EventSpec(
@@ -289,7 +289,7 @@ CATALOG: dict[EventType, EventSpec] = {
         sensitivity=Sensitivity.METADATA,
         presence_relevant=True,
         snapshot_key="presence_state",
-        source="deferred_10a4",
+        source="core",
         privacy_note="10A.4 owns the state machine; this reserves the contract slot.",
     ),
     EventType.SPEECH_STARTED: EventSpec(
@@ -301,7 +301,7 @@ CATALOG: dict[EventType, EventSpec] = {
         required=("length",),
         sensitivity=Sensitivity.METADATA,
         presence_relevant=True,
-        source="deferred_10b",
+        source="client",
     ),
     EventType.SPEECH_CHUNK: EventSpec(
         type=EventType.SPEECH_CHUNK,
@@ -312,7 +312,7 @@ CATALOG: dict[EventType, EventSpec] = {
         required=("text",),
         sensitivity=Sensitivity.CONTENT,
         presence_relevant=True,
-        source="deferred_10b",
+        source="client",
         privacy_note=(
             "Carries AURA's own words, which is the point -- the user asked to "
             "be able to read what she says when audio is not audible. It is "
@@ -328,7 +328,7 @@ CATALOG: dict[EventType, EventSpec] = {
         required=("completed",),
         sensitivity=Sensitivity.METADATA,
         presence_relevant=True,
-        source="deferred_10b",
+        source="client",
     ),
     # -- system -------------------------------------------------------------
     EventType.RESOURCE_PRESSURE: EventSpec(
@@ -412,5 +412,17 @@ def live_snapshot_keys() -> dict[str, EventType]:
 
 
 def live_types() -> tuple[EventType, ...]:
-    """Types actually published as of 10A.3. The rest are reserved slots."""
+    """Types that actually have a producer. The rest are reserved slots.
+
+    Keeping this honest is load-bearing rather than tidy. `live_snapshot_keys()`
+    is derived from it, and that is what the snapshot-completeness test asserts
+    against -- so a spec left marked `deferred` after its producer was written
+    quietly excludes itself from the check that would have caught it. That
+    happened: `APP_CHANGED`, `FOCUS_MODE` and `PRESENCE_STATE` still said
+    `deferred_10a4` after 10A.4 and 10A.12 built them, which is exactly the
+    class of contract violation the test exists to find.
+
+    Two entries remain deferred, both genuinely: `VLM_OBSERVATION` and
+    `RESOURCE_PRESSURE` wait on 10C.
+    """
     return tuple(t for t, s in CATALOG.items() if not s.source.startswith("deferred"))

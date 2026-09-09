@@ -97,6 +97,23 @@ class CoreClient:
                 f"Cannot reach AURA Core at {self._base}. Start it with: aura serve"
             ) from exc
 
+    def publish_event(self, payload: dict[str, object]) -> bool:
+        """Bridge one client event onto Core's bus. False if it did not land.
+
+        Short timeout, and failure is a return value rather than an exception:
+        this is called from the speech path, and an unreachable Core must cost
+        a subtitle, never a spoken reply. The caller drops it on the floor.
+        """
+        try:
+            reply = self._client.post("/v1/events/client", json=payload, timeout=2.0)
+        except httpx.HTTPError as exc:
+            log.debug("voice.event_publish_failed", error=type(exc).__name__)
+            return False
+        if reply.status_code >= 400:
+            log.debug("voice.event_rejected", status=reply.status_code)
+            return False
+        return True
+
     def new_session(self) -> None:
         self.session_id = None
 

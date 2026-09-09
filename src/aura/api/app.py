@@ -799,17 +799,26 @@ def _install_routes(app: FastAPI) -> None:
         """Bridge an occurrence from a client process onto the bus.
 
         Exists because the voice loop is a separate process: wake-word
-        detection and barge-in happen there and cannot reach Core's in-process
-        bus. Deliberately not a general publish endpoint -- see ClientEvent.
+        detection, barge-in and speech playback happen there and cannot reach
+        Core's in-process bus. Deliberately not a general publish endpoint --
+        see ClientEvent.
 
-        **Origin is forced to USER here.** A client cannot label anything CORE
-        or OBSERVATION, so it cannot forge a trusted or an untrusted event.
+        **Origin is never taken from the request.** Each type is dispatched to
+        its typed emitter method, and the emitter reads origin and delivery out
+        of the catalog. A client chooses *which catalogued thing happened*, and
+        nothing else about how it is labelled.
         """
         emitter = EventEmitter(state.events)
         if body.type == "user_spoke":
             emitter.user_spoke("x" * body.length, spoken=body.spoken)
-        else:
+        elif body.type == "user_interrupted":
             emitter.user_interrupted(body.method or "unknown")
+        elif body.type == "speech_started":
+            emitter.speech_started(length=body.length)
+        elif body.type == "speech_chunk":
+            emitter.speech_chunk(body.text)
+        else:
+            emitter.speech_ended(completed=body.completed)
         return {"accepted": True, "seq": state.events.seq}
 
     @app.post("/v1/approvals/{approval_id}", tags=["events"])

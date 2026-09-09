@@ -37,6 +37,12 @@ log = get_logger(__name__)
 # an action -- but not enough to smuggle a document into the bus.
 MAX_SUMMARY = 400
 
+# One spoken sentence. Generous for a sentence and far too small for a
+# document, which is the shape the cap is chosen for: SPEECH_CHUNK is the one
+# event that legitimately carries prose, and a cap is what stops "AURA's words"
+# from quietly becoming "whatever the caller wanted on the bus".
+MAX_SPEECH_CHUNK = 1_000
+
 
 class EventEmitter:
     """Publishes catalogued events. Safe to call with no bus."""
@@ -110,6 +116,55 @@ class EventEmitter:
         """Barge-in or a spoken stop command."""
         self._emit(
             EventType.USER_INTERRUPTED, {"method": method}, session_id=session_id
+        )
+
+    # -- speech (10B.1) -------------------------------------------------------
+    #
+    # The asymmetry with `user_spoke` above is deliberate and worth stating
+    # plainly, because it looks inconsistent until you see why.
+    #
+    # `USER_SPOKE` carries a LENGTH. `SPEECH_CHUNK` carries the TEXT.
+    #
+    # The user's words are captured input: they were picked up by a microphone
+    # that is always listening, and putting them on a bus that a separate
+    # process subscribes to would make the transcript available to anything
+    # that can read the stream. AURA's words are output. She is about to say
+    # them out loud, in the room. Withholding them from the subtitle would
+    # protect nothing and would defeat the entire purpose -- the subtitle
+    # exists so the reply can be READ when the audio cannot be heard.
+
+    def speech_started(self, *, length: int, session_id: str | None = None) -> None:
+        """AURA began speaking a reply.
+
+        The length is the whole reply, so a subtitle panel can size itself
+        before the first sentence arrives rather than reflowing on every chunk.
+        """
+        self._emit(
+            EventType.SPEECH_STARTED, {"length": max(0, length)}, session_id=session_id
+        )
+
+    def speech_chunk(self, text: str, *, session_id: str | None = None) -> None:
+        """One sentence of the reply, as it is spoken.
+
+        Published per sentence rather than per audio buffer: a subtitle that
+        updated per 20 ms PCM frame would flicker, and the sentence is the unit
+        the synthesiser already works in.
+        """
+        self._emit(
+            EventType.SPEECH_CHUNK,
+            {"text": text[:MAX_SPEECH_CHUNK]},
+            session_id=session_id,
+        )
+
+    def speech_ended(self, *, completed: bool, session_id: str | None = None) -> None:
+        """AURA stopped speaking.
+
+        `completed` distinguishes finishing from being cut off. The overlay
+        needs the difference: a reply that was interrupted should not leave its
+        last sentence sitting on screen as though it were the final word.
+        """
+        self._emit(
+            EventType.SPEECH_ENDED, {"completed": completed}, session_id=session_id
         )
 
     # -- task ----------------------------------------------------------------

@@ -332,7 +332,7 @@ personal cognitive model.
 
 Full design: `docs/architecture/09-phase10-presence.md` (revision 2).
 
-**Status: 10A complete. 10B, 10C, 10D not started.**
+**Status: 10A complete. 10B started (10B.1 done). 10C, 10D not started.**
 
 10A shipped in five steps: the event bus as a security contract (10A.1), SSE
 transport and the nonce-bound approval path (10A.2), the event catalog with
@@ -346,6 +346,18 @@ resolution (10A.4), and the desktop overlay (10A.5-10A.11). Contracts:
 name only, and stops entirely in PRIVATE/SLEEP), the `FOCUS_MODE` control path
 (`POST /v1/focus`, audited, carried in the snapshot), and a system tray icon
 (show/hide, focus toggle, quit).
+
+**10B.1** put speech on the bus: `SPEECH_STARTED` / `_CHUNK` / `_ENDED`,
+published from the voice process through the existing client bridge. The
+subtitle is not yet driven by them -- that is 10B.2.
+
+Two things fell out of it. The client bridge's rule was written as "origin is
+forced to USER"; the actual property is that *a client cannot choose an
+origin*, since the catalog decides. Speech is the first case where those differ,
+because AURA's own utterances are `Origin.CORE`. And `APP_CHANGED`, `FOCUS_MODE`
+and `PRESENCE_STATE` were still marked `deferred` after 10A.4 and 10A.12 built
+them, which excluded them from the very snapshot-completeness check that exists
+to catch that -- now corrected, and asserted.
 
 10A.12 also fixed a contract violation the new snapshot-completeness test
 caught: `APP_CHANGED` is catalogued as STATE owning `foreground_application`,
