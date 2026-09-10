@@ -27,6 +27,10 @@ npx n8n
 It comes up on <http://localhost:5678>. First run asks you to create a local
 account — that account is n8n's, not AURA's.
 
+Manifest URLs use `127.0.0.1` rather than `localhost` deliberately: on Windows
+`localhost` can resolve to `::1` while n8n listens on IPv4 only, which produces
+a connection refused that looks like n8n being down.
+
 > **Not measured on this machine.** n8n plus a Node runtime is roughly
 > 400 MB–1 GB. This project's convention is to measure before committing, and
 > that measurement is still outstanding. See ADR-0004's resource note.
@@ -37,19 +41,20 @@ account — that account is n8n's, not AURA's.
 
 ### 3. Activate it
 
-Toggle **Active**, top right.
+Top right. **Newer n8n calls this button `Publish`; older versions show an
+`Active` toggle.** Same thing.
 
 This step is the one people miss, and it produces the single most common n8n
-error. An inactive workflow has no production URL, so AURA gets a 404 — which
-is why the provider's 404 message says *"the workflow may be inactive"* rather
-than just reporting the status code.
+error. An unpublished workflow has no production URL, so AURA gets a 404 —
+which is why the provider's 404 message says *"the workflow may be inactive"*
+rather than just reporting the status code.
 
 The two URLs are not interchangeable:
 
 | URL | Works when |
 |---|---|
 | `/webhook-test/aura/ping` | Only while you have clicked "Execute workflow" — one call, for debugging |
-| `/webhook/aura/ping` | The workflow is **Active**. This is what belongs in the manifest |
+| `/webhook/aura/ping` | The workflow is **published/active**. This is what belongs in the manifest |
 
 ### 4. Declare it to AURA
 

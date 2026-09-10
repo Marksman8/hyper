@@ -81,4 +81,20 @@
 #     idempotent: false
 #     reversible: false
 
-workflows: []
+workflows:
+  # Declared 2026-09-10. No credentials, reads nothing, sends nothing --
+  # it exists to prove the AURA -> n8n path works end to end.
+  - id: aura_ping
+    description: >-
+      Check that the n8n automation service is reachable and answering.
+      Returns a confirmation and echoes back whatever it was given.
+    webhook: http://127.0.0.1:5678/webhook/aura/ping
+    parameters:
+      type: object
+      properties:
+        note:
+          type: string
+          description: Optional text to echo back, for testing.
+    level: 1
+    timeout_s: 15
+    idempotent: true

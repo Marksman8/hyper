@@ -175,11 +175,21 @@ def test_a_missing_manifest_means_no_workflows(tmp_path: Path) -> None:
     assert load_manifest(tmp_path / "nope.yaml") == []
 
 
-def test_the_shipped_manifest_is_valid_and_empty() -> None:
-    """The repository's own manifest must parse, and must declare nothing
-    until a human declares something."""
+def test_the_shipped_manifest_is_valid() -> None:
+    """The repository's own manifest must parse.
+
+    This asserted `== []` until a workflow was actually declared, which was
+    testing an accident rather than a property: the manifest is the file a
+    human edits, so "it is empty" is true only until the feature is used once.
+    What has to stay true is that whatever it declares is well-formed, and that
+    a mistake in it fails here rather than at startup on someone's machine.
+    """
     path = Path(__file__).resolve().parents[2] / "config" / "workflows.yaml"
-    assert load_manifest(path) == []
+
+    for workflow in load_manifest(path):
+        assert workflow.description, f"{workflow.id} has no description"
+        assert workflow.parameters.get("type") == "object"
+        assert workflow.level >= PermissionLevel.READ
 
 
 # ===========================================================================
