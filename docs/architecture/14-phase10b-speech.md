@@ -1,6 +1,6 @@
 # 10B — Speech you can see
 
-Status: **10B.1–10B.4 complete** · 10B.5–10B.7 outstanding · Date: 2026-09-10
+Status: **10B.1–10B.5 complete** · 10B.6–10B.7 outstanding · Date: 2026-09-10
 
 ---
 
@@ -139,6 +139,43 @@ the command that fetches it.
 The design called this "a config change, not engineering", and that turned out
 to be true in the strongest sense: there was nothing to build.
 
+## 7a. Micro-expressions (10B.5)
+
+A short fixed phrase in another language, occasionally prepended: 了解 before
+starting work, よし on success. The subtitle carries the phrase **and an English
+gloss**, so meaning survives when the audio cannot be heard — which is the case
+this whole milestone exists for.
+
+**The model never writes these.** It answers in English; this layer decides
+whether one fits and prepends it. That separation is the safety property, and
+it is enforced by the interface rather than by instruction: `select()` takes a
+`Moment` and nothing else, so there is no parameter a model's output could
+travel through. A test asserts the signature.
+
+Ask a model to "add personality" instead and foreign phrases leak into every
+third response, drift in register, and occasionally mean something other than
+intended — none of it reviewable, because the phrase is produced fresh each
+time. Here the set is a constant you can read in one screen, and 10B.6 renders
+each to a fixed WAV, so every sound AURA can make is auditable in advance.
+
+### Restraint is the feature
+
+| Rule | Why |
+|---|---|
+| LOW by default, ~1 in 8 | A micro-expression is a garnish; the failure mode of a garnish is applying it to everything |
+| MEDIUM is 1 in 4, not a coin flip | A coin flip reads as constant, because listeners remember the hits |
+| Never the same phrase twice running | With one candidate left, it stays silent rather than repeating |
+| 90 s hard floor between any two | Frequency governs the average; a burst of three short turns is what people actually notice |
+| `enabled` and `frequency: off` both silence it | "Off" and "never" are different questions a user might ask |
+
+`Moment` is deliberately *not* `PresenceState` — four members describing what
+AURA is reacting to, against thirteen describing what she looks like. Coupling
+them would make every new visual state a personality question.
+
+**Measured over a simulated session:** 60 turns across 3.2 hours at the default
+settings produced **6 micro-expressions — 10% of turns**, none repeating
+consecutively.
+
 ## 8. The bug a real screen found
 
 `resize()` moves the bottom and right edges and leaves the top-left alone, so a
@@ -158,7 +195,6 @@ grows with the text.
 
 | | | Note |
 |---|---|---|
-| 10B.5 | `PersonalityEngine` — state + context + cooldown | |
 | 10B.6 | Pre-rendered micro-expressions, glossed in the subtitle | Clips are fixed WAVs so pronunciation is right and every phrase is auditable |
 | 10B.7 | Interrupt stops speech | **Blocked on the barge-in measurement** — see `KNOWN-ISSUES.md` |
 

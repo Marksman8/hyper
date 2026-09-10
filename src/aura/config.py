@@ -210,6 +210,30 @@ class TTSConfig(_Section):
     volume: float = Field(default=1.0, gt=0.0, le=2.0)
 
 
+class PersonalityConfig(_Section):
+    """Phase 10B.5. Micro-expressions, and the restraint on them.
+
+    Off is a supported setting and a first-class one: the brief asked
+    specifically that foreign words not leak into every response, so the way
+    to switch this off must be obvious and must actually silence it rather
+    than merely reduce it.
+    """
+
+    enabled: bool = True
+    # off | low (~1 in 8) | medium (~1 in 4). LOW is the default because a
+    # micro-expression is a garnish, and the failure mode of a garnish is
+    # applying it to everything.
+    frequency: str = "low"
+    # Which phrase sets are in play. Japanese only by default -- adding a
+    # language multiplies how often *something* fits, which is a frequency
+    # increase by the back door.
+    languages: list[str] = Field(default_factory=lambda: ["ja"])
+    # Hard floor between any two, whatever the dice say. Frequency governs the
+    # long-run average; this governs how it feels during a burst of short
+    # turns, which is what a person actually notices.
+    min_gap_s: float = Field(default=90.0, ge=0.0)
+
+
 class VoiceConfig(_Section):
     """Phase 2. Consumed only by the voice process, never by AURA Core."""
 
@@ -313,6 +337,7 @@ class VoiceConfig(_Section):
     wake: WakeConfig = Field(default_factory=WakeConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
+    personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
 
 
 class ToolsConfig(_Section):
