@@ -73,3 +73,64 @@ catalogue:
     gpu_layers: -1
     supports_tools: true
     notes: "Fast, permissive licence. Fallback option."
+
+# ---------------------------------------------------------------------------
+# Vision-language models (Phase 10C).
+#
+# A VLM needs TWO files: the weights, and an `mmproj` vision projector that
+# turns pixels into tokens the model can attend to. llama-server takes both:
+#
+#   llama-server -m <model>.gguf --mmproj <mmproj>.gguf --port 8082
+#
+# **These do not run alongside the language model.** 3.3 GB of Qwen3.5 plus
+# ~2.9 GB of vision leaves nothing on an 8 GB card that is also driving the
+# display, so 10C.3 evicts one to load the other. `vram_gb` below is weights
+# plus projector plus a small KV cache, measured where marked.
+#
+# The mmproj quantisation matters more than people expect: Q8_0 rather than
+# F16 saves 0.5 GB of VRAM for no accuracy anyone has been able to show on
+# screen-reading tasks, and 0.5 GB is a tenth of the budget here.
+# ---------------------------------------------------------------------------
+
+active_vision: qwen2.5-vl-3b
+
+vision_catalogue:
+  qwen2.5-vl-3b:
+    display_name: "Qwen2.5-VL 3B Instruct"
+    repo_id: "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF"
+    filename: "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+    mmproj: "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf"
+    quantization: "Q4_K_M"
+    context_length: 8192
+    vram_gb: 3.2
+    gpu_layers: -1
+    notes: "10C default. 1.93 GB weights + 0.84 GB projector. Chosen over the
+            7B because eviction only helps if the thing being loaded actually
+            fits with room to spare; ggml-org's own conversion, so it is the
+            most likely to work with --mmproj."
+
+  qwen2.5-vl-7b:
+    display_name: "Qwen2.5-VL 7B Instruct"
+    repo_id: "ggml-org/Qwen2.5-VL-7B-Instruct-GGUF"
+    filename: "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
+    mmproj: "mmproj-Qwen2.5-VL-7B-Instruct-Q8_0.gguf"
+    quantization: "Q4_K_M"
+    context_length: 8192
+    vram_gb: 6.0
+    gpu_layers: -1
+    notes: "Noticeably better at reading dense UI. Leaves ~2 GB on this card,
+            which is not enough for the display plus anything else -- usable
+            only with the language model fully evicted."
+
+  smolvlm2-2.2b:
+    display_name: "SmolVLM2 2.2B Instruct"
+    repo_id: "ggml-org/SmolVLM2-2.2B-Instruct-GGUF"
+    filename: "SmolVLM2-2.2B-Instruct-Q4_K_M.gguf"
+    mmproj: "mmproj-SmolVLM2-2.2B-Instruct-Q8_0.gguf"
+    quantization: "Q4_K_M"
+    context_length: 8192
+    vram_gb: 2.2
+    gpu_layers: -1
+    notes: "The fallback if eviction turns out to be too slow to live with.
+            Small enough to sit alongside a 4B language model, at the cost of
+            being weaker on small text."

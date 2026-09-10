@@ -325,3 +325,80 @@ def test_the_vlm_is_a_separate_server_from_the_language_model() -> None:
     settings = Settings()
 
     assert settings.vision.vlm.base_url != settings.llm.base_url
+
+
+# ===========================================================================
+# The catalogue and the two-file rule (10C.2)
+# ===========================================================================
+
+
+def test_every_vision_entry_declares_a_projector() -> None:
+    """A VLM GGUF loaded without its mmproj starts happily, answers
+    confidently, and cannot see. Making the field required is what turns that
+    into a startup error rather than a mystery."""
+    from aura.config import get_model_catalogue
+
+    for key, entry in get_model_catalogue().vision_catalogue.items():
+        assert entry.mmproj, f"{key} has no mmproj"
+        assert entry.mmproj.endswith(".gguf")
+        assert entry.mmproj != entry.filename
+
+
+def test_the_active_vision_model_resolves() -> None:
+    from aura.config import get_model_catalogue
+
+    entry = get_model_catalogue().active_vision_entry()
+
+    assert entry.filename.endswith(".gguf")
+    assert entry.vram_gb > 0
+
+
+def test_an_unknown_active_vision_is_a_config_error() -> None:
+    from aura.config import ModelCatalogue, VisionModelEntry
+    from aura.errors import ConfigError
+
+    cat = ModelCatalogue(
+        active="x",
+        catalogue={},
+        active_vision="missing",
+        vision_catalogue={
+            "real": VisionModelEntry(
+                display_name="R", repo_id="r/r", filename="r.gguf", mmproj="m.gguf"
+            )
+        },
+    )
+
+    with pytest.raises(ConfigError, match="not in"):
+        cat.active_vision_entry()
+
+
+def test_the_resolution_cap_is_small_enough_to_be_usable() -> None:
+    """Measured: ~40 seconds per megapixel on this hardware. A full 1920x1080
+    screenshot takes 83 s, which is not a slow call but an unusable one.
+
+    768 px wide puts a full-width capture near 12 s. If someone raises this,
+    they should have re-measured first.
+    """
+    from aura.config import Settings
+
+    width = Settings().vision.vlm.max_image_width
+    megapixels = (width * width * 9 / 16) / 1e6
+
+    assert megapixels * 40 < 20, (
+        f"{width}px implies ~{megapixels * 40:.0f}s per call; re-measure before raising it"
+    )
+
+
+def test_the_vision_model_fits_beside_nothing_else() -> None:
+    """The arithmetic that forces 10C.3 to exist, asserted so it cannot be
+    quietly forgotten: the two models do not co-reside on this card."""
+    from aura.config import get_model_catalogue
+
+    cat = get_model_catalogue()
+    llm = cat.active_entry().vram_gb
+    vlm = cat.active_vision_entry().vram_gb
+
+    assert llm + vlm > 6.0, (
+        "the two models now appear to fit together; if that is really true, "
+        "ResourceGovernor's eviction may no longer be necessary"
+    )

@@ -332,7 +332,7 @@ personal cognitive model.
 
 Full design: `docs/architecture/09-phase10-presence.md` (revision 2).
 
-**Status: 10A and 10B complete. 10C started (10C.1 of 12). 10D not started.**
+**Status: 10A and 10B complete. 10C started (2 of 12). 10D not started.**
 
 10C.1 put the `VLMProvider` seam in: a VLM is served over the *same*
 OpenAI-compatible endpoint AURA already speaks (`llama-server --mmproj`), so
@@ -340,6 +340,13 @@ there is no second inference stack and torch still does not enter. `NullVLM` is
 the default and is a supported configuration rather than a failure -- the
 arithmetic does not allow both models resident, so everything above the seam
 has to work with no VLM at all.
+
+10C.2 put a second llama-server on :8082 with Qwen2.5-VL-3B, and measured what
+the design had only estimated. A full-resolution screenshot takes **83 seconds**
+-- roughly 40 s per megapixel -- against an estimate of 3-8 s. Images are now
+capped at 768 px wide, which lands near 12 s; a targeted crop is 4.2 s. This is
+the same failure Phase 5 hit with OCR, in a different subsystem. Contract:
+`docs/architecture/15-phase10c-vision.md`.
 
 10B so far: speech on the bus (10B.1), the live subtitle (10B.2), the
 amplitude-driven mouth (10B.3), and the female voice (10B.4 -- which turned out

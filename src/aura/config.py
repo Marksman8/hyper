@@ -454,6 +454,26 @@ class VLMConfig(_Section):
     # at 3-8 seconds for a screen question and the estimate is not yet measured.
     timeout_s: float = Field(default=60.0, gt=0.0, le=600.0)
     max_tokens: int = Field(default=512, gt=0, le=4096)
+    # **The most important number in this section.** Measured on this machine
+    # with Qwen2.5-VL-3B, latency is roughly linear in pixel count at ~40
+    # seconds per megapixel:
+    #
+    #     1920x1080  (2.07 MP)   83.2 s
+    #      960x540   (0.52 MP)   20.9 s
+    #      640x360   (0.23 MP)    9.8 s
+    #      480x270   (0.13 MP)    6.7 s
+    #      400x200   (0.08 MP)    4.2 s
+    #
+    # The Phase 10 design estimated 3-8 s for a screen question. That is only
+    # true of a small image, so images are downscaled to this width before
+    # being sent. 768 keeps a full-width screenshot near 12 s while leaving
+    # window titles and headings legible; small body text needs a crop, which
+    # is what the targeted-crop path in 10C.12 is for.
+    #
+    # This is the same failure Phase 5 hit with OCR -- 42 s per screenshot
+    # because nothing capped the resolution -- arriving a second time in a
+    # different subsystem. Capping at the edge is the fix in both.
+    max_image_width: int = Field(default=768, ge=128, le=3840)
 
     def resolved_api_key(self) -> str:
         if self.api_key:
@@ -650,9 +670,36 @@ class ModelEntry(BaseModel):
     notes: str = ""
 
 
+class VisionModelEntry(ModelEntry):
+    """A VLM entry. Same as a language model plus the vision projector.
+
+    `mmproj` is not optional and has no default: a VLM GGUF without its
+    projector loads happily and then cannot see, which is a failure that looks
+    like a bad model rather than a missing file.
+    """
+
+    mmproj: str
+
+
 class ModelCatalogue(BaseModel):
     active: str
     catalogue: dict[str, ModelEntry]
+    # Phase 10C. Separate from `active`/`catalogue` rather than mixed in,
+    # because these are served by a SECOND llama-server on its own port and
+    # the two are never both resident -- see the header of models.yaml.
+    active_vision: str = ""
+    vision_catalogue: dict[str, VisionModelEntry] = Field(default_factory=dict)
+
+    def active_vision_entry(self) -> VisionModelEntry:
+        if not self.active_vision:
+            raise ConfigError("No `active_vision` set in config/models.yaml.")
+        try:
+            return self.vision_catalogue[self.active_vision]
+        except KeyError as exc:
+            raise ConfigError(
+                f"active_vision is {self.active_vision!r}, which is not in "
+                f"vision_catalogue. Known: {sorted(self.vision_catalogue)}"
+            ) from exc
 
     def active_entry(self) -> ModelEntry:
         try:

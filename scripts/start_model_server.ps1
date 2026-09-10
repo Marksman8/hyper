@@ -76,13 +76,26 @@ $ctx = if ($Context -gt 0) { $Context } else { $cfg.ctx }
 $ngl = if ($GpuLayers -ne -999) { $GpuLayers } else { $cfg.ngl }
 
 # --- Warn before CUDA OOM rather than after ----------------------------------
+# Advisory only, and wrapped because it is advisory. nvidia-smi can be present
+# and still fail -- a permissions error returns nothing, which left $mem null
+# and took the whole script down on a .Trim(). A VRAM *warning* that prevents
+# the server starting is worse than no warning at all. Found in 10C.2.
 $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($smi) {
-    $mem = (& nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits) -split ','
-    $freeGb = ([double]$mem[1].Trim() - [double]$mem[0].Trim()) / 1024
-    Write-Host ("  VRAM free: {0:N1} GB, model needs ~{1} GB" -f $freeGb, $cfg.vram)
-    if ($freeGb -lt $cfg.vram) {
-        Write-Warning "Not enough free VRAM. Close GPU applications, or pass -GpuLayers to offload fewer layers."
+    try {
+        $raw = (& nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1)
+        $mem = if ($raw) { $raw -split ',' } else { $null }
+        if ($mem -and $mem.Count -ge 2) {
+            $freeGb = ([double]$mem[1].Trim() - [double]$mem[0].Trim()) / 1024
+            Write-Host ("  VRAM free: {0:N1} GB, model needs ~{1} GB" -f $freeGb, $cfg.vram)
+            if ($freeGb -lt $cfg.vram) {
+                Write-Warning "Not enough free VRAM. Close GPU applications, or pass -GpuLayers to offload fewer layers."
+            }
+        } else {
+            Write-Host "  VRAM: nvidia-smi gave no reading; skipping the check." -ForegroundColor DarkGray
+        }
+    } catch {
+        Write-Host "  VRAM: could not be read ($($_.Exception.Message)); skipping the check." -ForegroundColor DarkGray
     }
 }
 
