@@ -37,6 +37,25 @@ GAZE_MS = 90
 # States in which AURA is not visible at all.
 HIDDEN = frozenset({PresenceState.PRIVATE, PresenceState.SLEEP})
 
+# How long a finished line stays up, per character.
+#
+# ~22 characters a second, which is brisk but not a race. The subtitle is a
+# fallback for muted audio rather than the primary channel, so it does not need
+# to sit there indefinitely -- but clearing on the audio's last sample would
+# cut off a reader mid-sentence, which is the one thing it exists to prevent.
+READ_MS_PER_CHAR = 45
+MIN_HOLD_MS = 1_200
+MAX_HOLD_MS = 5_000
+
+# An interrupted reply clears fast. Its last sentence was cut off, and leaving
+# a fragment on screen presents it as though it were the final word.
+INTERRUPTED_HOLD_MS = 400
+
+
+def _read_ms(text: str) -> int:
+    """How long to leave `text` up after the audio stops."""
+    return max(MIN_HOLD_MS, min(MAX_HOLD_MS, len(text) * READ_MS_PER_CHAR))
+
 
 class PresenceController(QObject):
     """Turns events into presentation. Holds no state of its own beyond what
@@ -62,8 +81,11 @@ class PresenceController(QObject):
         # privacy setting.
         self._user_hidden = False
         self.tray: Any = None
+        # Clears the last spoken line once it has had time to be read.
+        self._subtitle_timer: QTimer | None = None
 
         overlay.dragged.connect(self._on_dragged)
+        overlay.resized.connect(self._reanchor)
 
         # Gaze is OFF by default, and even when on it moves only the eyes.
         # Continuous body-following is the fastest way to make a desktop
@@ -92,6 +114,12 @@ class PresenceController(QObject):
             # Both directions: a reconnect must be able to turn focus OFF too,
             # or the overlay stays dimmed after Core says it is finished.
             self._set_focus_mode(bool(body.get("focus_mode")))
+            # SPEECH_* are occurrences and are deliberately not in the snapshot,
+            # so after a reconnect we do not know whether she is still talking.
+            # A line left over from before the drop would be the overlay
+            # asserting something it cannot know.
+            self._cancel_subtitle_clear()
+            self._overlay.set_subtitle("")
             return
 
         if kind == "presence_state":
@@ -102,6 +130,69 @@ class PresenceController(QObject):
             # A permitted movement trigger. The payload is an OBSERVATION, and
             # it is used only to decide *where to sit* -- never what to do.
             self._consider_move(MoveReason.APP_CHANGED)
+        elif kind == "speech_started":
+            self._speech_started()
+        elif kind == "speech_chunk":
+            self._speech_chunk(str(body.get("text", "")))
+        elif kind == "speech_ended":
+            self._speech_ended(completed=bool(body.get("completed", True)))
+
+    # -- speech (10B.2) --------------------------------------------------------
+    #
+    # The requirement this serves, in the user's words: *"sometimes I may not
+    # be able to hear the audio."* So the subtitle is not decoration -- with
+    # sound muted it is the only copy of what AURA said, and every decision
+    # below follows from treating it that way.
+
+    def _speech_started(self) -> None:
+        """Clear the decks. The previous reply's last line must not linger into
+        the next one, which would attribute old words to a new answer."""
+        self._cancel_subtitle_clear()
+        self._overlay.set_subtitle("")
+
+    def _speech_chunk(self, text: str) -> None:
+        """One sentence, replacing the last.
+
+        Deliberately not accumulated. A subtitle holding a whole reply grows
+        past the screen and stops being readable at exactly the length where
+        reading it matters most; the sentence being spoken *now* is the one
+        worth showing.
+        """
+        if not text or self._state in HIDDEN:
+            # Nothing is drawn while private, and nothing is retained either --
+            # a stored line would reappear the moment privacy ended.
+            return
+        self._cancel_subtitle_clear()
+        self._overlay.set_subtitle(text)
+
+    def _speech_ended(self, *, completed: bool) -> None:
+        """Hold the last line long enough to read, then clear.
+
+        The audio finishing is not the same as the reader finishing: the last
+        sentence arrives and the room goes quiet, and someone reading rather
+        than listening is still mid-line. So the hold scales with length.
+
+        An interrupted reply gets a much shorter hold. Its last sentence was
+        cut off, and leaving it on screen presents a fragment as if it were the
+        final word.
+        """
+        if not completed:
+            self._schedule_subtitle_clear(INTERRUPTED_HOLD_MS)
+            return
+        self._schedule_subtitle_clear(_read_ms(self._overlay.subtitle))
+
+    def _schedule_subtitle_clear(self, delay_ms: int) -> None:
+        self._cancel_subtitle_clear()
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: self._overlay.set_subtitle(""))
+        timer.start(delay_ms)
+        self._subtitle_timer = timer
+
+    def _cancel_subtitle_clear(self) -> None:
+        if self._subtitle_timer is not None:
+            self._subtitle_timer.stop()
+            self._subtitle_timer = None
 
     def _apply_state(self, name: str, *, immediate: bool = False) -> None:
         try:
@@ -118,6 +209,11 @@ class PresenceController(QObject):
         # place where "graceful" is the wrong answer.
         if state in HIDDEN:
             self._overlay.hide()
+            # Dropped, not merely hidden. A retained line would reappear the
+            # moment privacy ended -- and what it would reappear with is the
+            # last thing AURA said before being told to stop.
+            self._cancel_subtitle_clear()
+            self._overlay.set_subtitle("")
             log.info("presence.hidden", state=str(state))
             self._sync_tray()
             return
@@ -189,6 +285,18 @@ class PresenceController(QObject):
         )
         if placement is not None:
             self._overlay.move(placement.x, placement.y)
+
+    def _reanchor(self) -> None:
+        """Re-apply the current anchor after a size change.
+
+        **This is deliberately not a move**, and so deliberately not routed
+        through `consider()`. The four-trigger rule and the three-second rate
+        limit exist to stop AURA *relocating*; holding the same anchor while
+        her panel grows a subtitle is the opposite -- it is what stops her
+        appearing to slide across the screen every time she says something.
+        Rate-limiting it would leave the panel clipped for three seconds.
+        """
+        self.place_initial()
 
     def place_initial(self) -> None:
         x, y = self._policy.resolve(

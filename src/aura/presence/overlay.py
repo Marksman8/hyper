@@ -49,6 +49,9 @@ class PresenceOverlay(QWidget):
     """The window. Renders; decides nothing."""
 
     dragged = Signal(int, int)
+    # The panel changed size -- a subtitle appeared, wrapped to a second line,
+    # or cleared. The controller re-anchors on this; see `_resize_for_content`.
+    resized = Signal()
 
     def __init__(self, avatar: AvatarBackend) -> None:
         super().__init__()
@@ -81,12 +84,25 @@ class PresenceOverlay(QWidget):
     # -- layout --------------------------------------------------------------
 
     def _resize_for_content(self) -> None:
+        """Grow or shrink to fit the avatar plus whatever subtitle is showing.
+
+        Emits `resized` so the controller can re-anchor. `resize()` moves the
+        bottom and right edges while leaving the top-left where it was, so a
+        bottom-right-anchored overlay that grows a subtitle grows *off the
+        screen* -- which is exactly what happened the first time this ran with
+        live speech: the avatar and the line under it were both clipped by the
+        screen edge.
+        """
         width, height = self._avatar_size
         if self._subtitle:
             width = max(width, SUBTITLE_WIDTH)
             height += self._subtitle_height()
+
+        if (width, height) == (self.width(), self.height()):
+            return
         self.resize(width, height)
         self._apply_mask()
+        self.resized.emit()
 
     def _subtitle_height(self) -> int:
         if not self._subtitle:
@@ -121,12 +137,23 @@ class PresenceOverlay(QWidget):
         self.update()
 
     def set_subtitle(self, text: str) -> None:
-        """Static in 10A; driven by SPEECH_* in 10B."""
+        """The line AURA is currently speaking. Driven by SPEECH_CHUNK (10B.2).
+
+        Rendered with `drawText`, never as rich text or HTML. The words come off
+        the bus and the overlay's whole job is to draw them -- a subtitle panel
+        that interpreted markup would be a rendering engine pointed at a
+        message stream, which is a larger surface than a subtitle needs.
+        """
         if text == self._subtitle:
             return
         self._subtitle = text
         self._resize_for_content()
         self.update()
+
+    @property
+    def subtitle(self) -> str:
+        """What is on screen now. Read by the controller to size the hold."""
+        return self._subtitle
 
     def look_at(self, dx: float, dy: float) -> None:
         self._avatar.look_at(dx, dy)
