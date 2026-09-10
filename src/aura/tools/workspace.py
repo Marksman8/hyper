@@ -40,6 +40,10 @@ DEFAULT_DENY_PATTERNS: tuple[str, ...] = (
     "**/.env",
     "**/.env.*",
     "**/var/secrets/**",
+    # The kill switch itself. Covered by the line above, and repeated
+    # explicitly so it stays protected if someone narrows that pattern: a
+    # switch AURA can delete is a switch AURA can disable.
+    "**/var/secrets/emergency_stop",
     "**/secrets/**",
     "**/*.pem",
     "**/*.key",

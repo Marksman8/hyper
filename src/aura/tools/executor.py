@@ -46,10 +46,16 @@ class ToolExecutor:
         audit: AuditLog | None = None,
         max_workers: int = 4,
         events: EventEmitter | None = None,
+        estop: Any = None,
     ) -> None:
         self._registry = registry
         self._policy = policy
         self._audit = audit
+        # The kill switch. Optional so an executor can be built without one in
+        # a test, but `build_executor` always supplies it -- and an executor
+        # with no stop is one nothing can halt, so the default is a loud
+        # omission rather than a quiet one.
+        self._estop = estop
         # Phase 10A.3. Announces that a human is needed. It does NOT issue an
         # approval or wait for one -- the executor still refuses immediately,
         # exactly as before. Wiring the issue-approve-resume loop changes the
@@ -65,6 +71,11 @@ class ToolExecutor:
         return self._registry
 
     @property
+    def estop(self) -> Any:
+        """The kill switch this executor obeys. Read-only."""
+        return self._estop
+
+    @property
     def policy(self) -> PermissionPolicy:
         """The policy in force. Read-only: nothing may widen it at runtime."""
         return self._policy
@@ -76,6 +87,29 @@ class ToolExecutor:
 
     async def execute(self, call: ToolCall, ctx: ToolContext) -> ToolResult:
         started = time.perf_counter()
+
+        # -- the stop, before anything else -----------------------------------
+        #
+        # First, ahead of even resolving the tool name, because the question the
+        # stop answers is "may anything happen at all" and that does not depend
+        # on which tool was asked for.
+        #
+        # This check did not exist until the Stage 1 audit demonstrated its
+        # absence: the stop gated model calls in the orchestrator, so with it
+        # engaged `POST /v1/chat` was refused and `POST /v1/tools/read_file`
+        # returned the file. The switch stopped AURA thinking and left her
+        # acting, which is the wrong way round.
+        if self._estop is not None and self._estop.engaged:
+            result = ToolResult.failure(
+                call,
+                f"Emergency stop is engaged ({self._estop.reason}). No tool will "
+                "run. Release it with POST /v1/control/estop or delete "
+                f"{self._estop.path}.",
+                decision="deny",
+            )
+            log.warning("tools.blocked_by_estop", tool=call.name)
+            await self._record(call, result, level=None)
+            return result
 
         try:
             tool = self._registry.get(call.name)

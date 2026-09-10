@@ -13,6 +13,7 @@ from aura.automation.factory import build_provider, load_workflows
 from aura.config import Settings
 from aura.logging import get_logger
 from aura.security.audit import AuditLog
+from aura.security.estop import EmergencyStop, build_estop
 from aura.security.permissions import PermissionLevel, PermissionPolicy
 from aura.tools.applications import application_tools
 from aura.tools.automation import automation_tools
@@ -66,11 +67,21 @@ def build_context(settings: Settings, session_id: str | None = None) -> ToolCont
 
 
 def build_executor(
-    settings: Settings, audit: AuditLog | None = None, events: Any = None
+    settings: Settings,
+    audit: AuditLog | None = None,
+    events: Any = None,
+    estop: EmergencyStop | None = None,
 ) -> ToolExecutor:
+    """Assemble the executor.
+
+    The kill switch is built here when one is not supplied, so an executor
+    constructed through the ordinary path always has one. An executor with no
+    stop is an executor nothing can halt.
+    """
     return ToolExecutor(
         registry=build_registry(settings),
         policy=build_policy(settings),
         audit=audit,
         events=events,
+        estop=estop or build_estop(settings),
     )

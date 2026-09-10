@@ -39,7 +39,6 @@ from aura.core.types import (
     Turn,
     Usage,
 )
-from aura.errors import EmergencyStopError
 from aura.logging import bind_session_id, current_session_id, get_logger
 from aura.memory.store import MemoryStore, build_history
 from aura.models.base import LLMProvider
@@ -83,9 +82,13 @@ class Orchestrator:
         # An `aura.core.agent.ToolRunner`, or None when tools are off. Typed
         # loosely on purpose: the orchestrator does not import aura.tools.
         self._tools = tools
-        # Runtime-flippable, distinct from the config default, so the emergency
-        # stop can be engaged without restarting AURA.
-        self._estop = settings.app.emergency_stop
+        # The shared kill switch. File-backed, so it survives a restart and can
+        # be engaged without AURA's cooperation -- and shared with ToolExecutor,
+        # so engaging it stops her acting as well as thinking. Those were two
+        # separate booleans until the Stage 1 audit showed what that cost.
+        from aura.security.estop import build_estop
+
+        self._estop_switch = build_estop(settings)
         # Phase 6. Built lazily so a provider that cannot chat never blocks boot.
         self._extractor: Any = None
         if settings.memory.learn_from_conversation:
@@ -107,18 +110,22 @@ class Orchestrator:
 
     @property
     def emergency_stop(self) -> bool:
-        return self._estop
+        return self._estop_switch.engaged
+
+    @property
+    def estop(self) -> Any:
+        """The switch itself, so callers can share it rather than copy it."""
+        return self._estop_switch
 
     def set_emergency_stop(self, engaged: bool) -> None:
-        self._estop = engaged
+        if engaged:
+            self._estop_switch.engage("api")
+        else:
+            self._estop_switch.release("api")
         log.warning("orchestrator.emergency_stop", engaged=engaged)
 
     def _guard(self) -> None:
-        if self._estop:
-            raise EmergencyStopError(
-                "Emergency stop is engaged. No model calls will be made. "
-                'Release it with POST /v1/control/estop {"engaged": false}.'
-            )
+        self._estop_switch.require_clear("Generation")
 
     # -- prompt assembly -----------------------------------------------------
 

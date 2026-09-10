@@ -91,6 +91,7 @@ class AppState:
     approvals: ApprovalRegistry = field(default_factory=ApprovalRegistry)
     presence: Any = None
     watcher: Any = None
+    estop: Any = None
 
 
 def get_state(request: Request) -> AppState:
@@ -127,6 +128,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # are silently dropped.
         bus = EventBus()
         emitter = EventEmitter(bus)
+        # ONE kill switch, shared by the orchestrator and the executor. They
+        # held separate booleans until the Stage 1 audit showed the cost: the
+        # stop refused model calls and let every tool run.
+        from aura.security.estop import build_estop
+
+        estop = build_estop(cfg)
         # Derives the visible state from the event contract and publishes
         # PRESENCE_STATE. Knows nothing about rendering; the overlay is just
         # another subscriber.
@@ -138,7 +145,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             from aura.tools.factory import build_context, build_executor
             from aura.tools.runner import ExecutorToolRunner
 
-            tools = build_executor(cfg, audit, events=emitter)
+            tools = build_executor(cfg, audit, events=emitter, estop=estop)
             runner = ExecutorToolRunner(tools, build_context(cfg))
 
         app.state.aura = AppState(
@@ -150,6 +157,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
             events=bus,
             presence=presence,
+            estop=estop,
             token=token,
             started_at=time.time(),
             tools=tools,
