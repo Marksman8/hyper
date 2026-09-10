@@ -159,8 +159,22 @@ class N8NProvider(AutomationProvider):
             # it rather than discarding it, so `data` is always an object.
             data = {"result": parsed}
 
-        summary = text[:MAX_SUMMARY_CHARS] if text else "The workflow completed."
-        if truncated or len(text) > MAX_SUMMARY_CHARS:
+        # A workflow that returns a `summary` string gets to say what the model
+        # reads; everything else in the object stays available in `data`.
+        #
+        # Without this the model is handed raw JSON, which is a poor answer to
+        # "what's on my calendar" -- it reads `{"summary":"3 meetings","count":3}`
+        # instead of "3 meetings". The field is a convention the workflow opts
+        # into, not a requirement: a workflow that returns anything else still
+        # works exactly as before.
+        #
+        # Note what this does NOT do: `summary` is still external content and is
+        # still wrapped as untrusted by WorkflowTool. Letting a workflow choose
+        # the wording of its own output is not the same as trusting it, and the
+        # non-escalation invariant is untouched either way.
+        declared = data.get("summary") if isinstance(data.get("summary"), str) else None
+        summary = (declared or text or "The workflow completed.")[:MAX_SUMMARY_CHARS]
+        if truncated or len(declared or text) > MAX_SUMMARY_CHARS:
             summary += "\n[response truncated]"
 
         # The body is not logged. It may contain mail, messages or documents,

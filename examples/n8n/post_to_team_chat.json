@@ -1,0 +1,52 @@
+{
+  "name": "AURA · post to team chat",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aura/team-chat",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-440, 0],
+      "id": "7a1f0003-0000-4000-8000-000000000001",
+      "name": "AURA calls this",
+      "webhookId": "aura-team-chat"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate on this side too.\n//\n// AURA already validated against the manifest's JSON Schema before the\n// request left the machine. This is the second check, and it exists\n// because the webhook URL is reachable by anything that can route to\n// n8n -- not only by AURA.\n\nconst args = $input.first().json.body ?? {};\nconst channel = String(args.channel || '').trim();\nconst text = String(args.text || '').trim();\n\nif (!channel || !text) {\n  throw new Error('channel and text are both required');\n}\nif (text.length > 4000) {\n  throw new Error('text is too long');\n}\n\nreturn [{ json: { channel, text } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 0],
+      "id": "7a1f0003-0000-4000-8000-000000000002",
+      "name": "Check the arguments"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===================================================================\n// REPLACE THIS NODE with the real destination.\n//\n// Drag in Slack (Send Message), Discord, Telegram or Mattermost, wire\n// it here, and map channel/text onto its fields. Its credentials live\n// in n8n and never reach AURA -- that is the entire arrangement.\n//\n// Until you do, this workflow is a dry run: it reports what it WOULD\n// have sent and sends nothing.\n// ===================================================================\n\nconst { channel, text } = $input.first().json;\n\nreturn [{\n  json: {\n    summary: `DRY RUN -- would post to #${channel}: \"${text}\"`,\n    sent: false,\n    channel,\n    text\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "id": "7a1f0003-0000-4000-8000-000000000003",
+      "name": "Send (replace me)"
+    }
+  ],
+  "connections": {
+    "AURA calls this": {
+      "main": [[{ "node": "Check the arguments", "type": "main", "index": 0 }]]
+    },
+    "Check the arguments": {
+      "main": [[{ "node": "Send (replace me)", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "meta": {
+    "description": "Third-party, visible to other people, cannot be unsent. LEVEL 4 with confirm: always -- AURA's manifest loader refuses to start if it is declared any lower."
+  }
+}

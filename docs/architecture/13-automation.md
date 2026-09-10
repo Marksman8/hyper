@@ -87,6 +87,34 @@ cost of telling them is one loud failure at startup.
 It is trivially evaded by renaming. That is fine: the point is to catch
 mistakes, not to defeat the person editing the authority file.
 
+## 3a. The workflow-side contract
+
+Three things a workflow must do, with importable examples in `examples/n8n/`.
+
+**Arguments arrive under `body`.** AURA POSTs them as the JSON request body, so
+in n8n they are at `$json.body`, not the top level.
+
+**Answer synchronously.** The webhook node's response mode must be `lastNode`
+or a Respond to Webhook node. n8n's default replies *"Workflow was started"*
+instantly, which would have AURA report success having received no result. A
+test asserts every shipped example sets one of the two.
+
+**Return a `summary` string.** It is what the model reads and speaks;
+everything else in the object stays available in the tool result's `data`.
+Without it the model is handed raw JSON, which is a poor answer to "what's on
+my calendar" -- it reads the braces instead of the sentence. The field is a
+convention a workflow opts into, not a requirement.
+
+`summary` being chosen by the workflow does not make it trusted. It is still
+wrapped as untrusted output before the model sees it -- letting a workflow
+choose the wording of its own result is not the same as believing it.
+
+| Example | Level | Notes |
+|---|---|---|
+| `aura_ping` | 1 | No credentials. Verifies the path. |
+| `daily_digest` | 1 | Reads. Sends nothing. |
+| `post_to_team_chat` | 4 + confirm | Ships as a dry run. |
+
 ## 4. Responses are data
 
 A workflow that reads mail returns content from the internet, and that content

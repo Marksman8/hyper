@@ -1,0 +1,40 @@
+{
+  "name": "AURA · ping",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aura/ping",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-220, 0],
+      "id": "7a1f0001-0000-4000-8000-000000000001",
+      "name": "AURA calls this",
+      "webhookId": "aura-ping",
+      "notes": "responseMode is 'lastNode' so the workflow ANSWERS AURA. The n8n default replies 'Workflow was started' immediately and AURA would learn nothing."
+    },
+    {
+      "parameters": {
+        "jsCode": "// AURA POSTs the tool's arguments as the JSON request body,\n// so they arrive under `.body` -- not at the top level.\nconst args = $input.first().json.body ?? {};\n\n// `summary` is what the model reads. Everything else stays available\n// to AURA as structured data.\nreturn [{\n  json: {\n    summary: `n8n is reachable. It received: ${JSON.stringify(args)}`,\n    ok: true,\n    received: args,\n    at: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "id": "7a1f0001-0000-4000-8000-000000000002",
+      "name": "Answer AURA"
+    }
+  ],
+  "connections": {
+    "AURA calls this": {
+      "main": [[{ "node": "Answer AURA", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "meta": {
+    "description": "Proves the AURA -> n8n path end to end with no credentials. Import, activate, declare it in config/workflows.yaml, then ask AURA to run aura_ping."
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "name": "AURA · daily digest",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aura/digest",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-440, 0],
+      "id": "7a1f0002-0000-4000-8000-000000000001",
+      "name": "AURA calls this",
+      "webhookId": "aura-digest"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===================================================================\n// REPLACE THIS NODE with real sources.\n//\n// Drag in a Google Calendar node (Get Many events) and a Gmail node\n// (Get Many messages, filter: is:unread), wire both between the webhook\n// and the node below, then read their output here instead of the\n// placeholder arrays.\n//\n// It is left as a Code node on purpose: shipping a Gmail node config\n// that expects credentials you have not created would fail on import\n// and tell you nothing useful.\n// ===================================================================\n\nconst args = $input.first().json.body ?? {};\nconst day = args.day || 'today';\n\nconst events = [\n  { time: '10:00', title: 'Standup' },\n  { time: '14:30', title: 'Design review' }\n];\nconst unreadCount = 4;\n\nreturn [{ json: { day, events, unreadCount } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-220, 0],
+      "id": "7a1f0002-0000-4000-8000-000000000002",
+      "name": "Gather (replace me)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Shape the answer for AURA.\n//\n// `summary` is prose the model reads out or works from. Keep it short:\n// it becomes conversation context, and a wall of JSON makes a worse\n// spoken answer than a sentence.\n//\n// Everything else stays structured, so a future tool can use it without\n// re-parsing English.\n\nconst { day, events, unreadCount } = $input.first().json;\n\nconst lines = events.map(e => `${e.time} ${e.title}`).join(', ');\nconst summary = events.length\n  ? `${events.length} events ${day}: ${lines}. ${unreadCount} unread messages.`\n  : `Nothing scheduled ${day}. ${unreadCount} unread messages.`;\n\nreturn [{ json: { summary, day, events, unreadCount } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "id": "7a1f0002-0000-4000-8000-000000000003",
+      "name": "Answer AURA"
+    }
+  ],
+  "connections": {
+    "AURA calls this": {
+      "main": [[{ "node": "Gather (replace me)", "type": "main", "index": 0 }]]
+    },
+    "Gather (replace me)": {
+      "main": [[{ "node": "Answer AURA", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "meta": {
+    "description": "Read-only digest. LEVEL 1 in the manifest: it reads, and sends nothing."
+  }
+}

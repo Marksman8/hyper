@@ -1,0 +1,76 @@
+# The manifest entries for the three example workflows.
+#
+# Copy the ones you want into config/workflows.yaml. This file is an example
+# and is NOT read by AURA -- `automation.manifest_path` points at
+# config/workflows.yaml, and only that file is the authority.
+
+workflows:
+  # -----------------------------------------------------------------------
+  # Start here. No credentials, nothing to configure, proves the whole path.
+  # -----------------------------------------------------------------------
+  - id: aura_ping
+    description: >-
+      Check that the n8n automation service is reachable and answering.
+      Returns a confirmation and echoes back whatever it was given.
+    webhook: http://127.0.0.1:5678/webhook/aura/ping
+    parameters:
+      type: object
+      properties:
+        note:
+          type: string
+          description: Optional text to echo back, for testing.
+    level: 1
+    timeout_s: 15
+    idempotent: true
+
+  # -----------------------------------------------------------------------
+  # Reads. Sends nothing. LEVEL 1.
+  # -----------------------------------------------------------------------
+  - id: daily_digest
+    # Note the wording: "unread mail count", not "unread message count".
+    # "message" is on the destructive-verb list, so the second phrasing makes
+    # the loader refuse to start. A false positive costs one rename; a false
+    # negative costs a sent message. See docs/architecture/13-automation.md §8.
+    description: >-
+      Summarise the day's calendar events and unread mail count into a
+      short digest. Read-only.
+    webhook: http://127.0.0.1:5678/webhook/aura/digest
+    parameters:
+      type: object
+      properties:
+        day:
+          type: string
+          description: Which day to summarise, e.g. "today" or "tomorrow".
+      required: [day]
+    level: 1
+    timeout_s: 30
+    idempotent: true
+
+  # -----------------------------------------------------------------------
+  # Third-party, visible to other people, cannot be unsent.
+  #
+  # LEVEL 4 with `confirm: always`. The loader REFUSES TO START if this is
+  # declared lower -- "post" is on the destructive-verb list, and a workflow
+  # that posts declared at level 2 means its author has misunderstood it.
+  # -----------------------------------------------------------------------
+  - id: post_to_team_chat
+    description: >-
+      Post a message to a team chat channel. Other people will see it and
+      it cannot be unsent.
+    webhook: http://127.0.0.1:5678/webhook/aura/team-chat
+    parameters:
+      type: object
+      properties:
+        channel:
+          type: string
+          description: Channel name, without the leading '#'.
+        text:
+          type: string
+          maxLength: 4000
+          description: The message to post.
+      required: [channel, text]
+    level: 4
+    confirm: always
+    timeout_s: 20
+    idempotent: false
+    reversible: false
