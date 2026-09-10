@@ -373,19 +373,19 @@ def test_an_unknown_active_vision_is_a_config_error() -> None:
 
 
 def test_the_resolution_cap_is_small_enough_to_be_usable() -> None:
-    """Measured: ~40 seconds per megapixel on this hardware. A full 1920x1080
-    screenshot takes 83 s, which is not a slow call but an unusable one.
+    """Measured on the GPU: ~2.2 seconds per megapixel, cold.
 
-    768 px wide puts a full-width capture near 12 s. If someone raises this,
-    they should have re-measured first.
+    1280 px lands at 2.0 s. If someone raises this, they should have
+    re-measured -- and re-measured on the GPU, which is the mistake that made
+    the first version of this test assert 40 s/MP.
     """
     from aura.config import Settings
 
     width = Settings().vision.vlm.max_image_width
     megapixels = (width * width * 9 / 16) / 1e6
 
-    assert megapixels * 40 < 20, (
-        f"{width}px implies ~{megapixels * 40:.0f}s per call; re-measure before raising it"
+    assert megapixels * 2.2 < 6.0, (
+        f"{width}px implies ~{megapixels * 2.2:.1f}s per call; re-measure before raising it"
     )
 
 

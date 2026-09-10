@@ -341,12 +341,14 @@ the default and is a supported configuration rather than a failure -- the
 arithmetic does not allow both models resident, so everything above the seam
 has to work with no VLM at all.
 
-10C.2 put a second llama-server on :8082 with Qwen2.5-VL-3B, and measured what
-the design had only estimated. A full-resolution screenshot takes **83 seconds**
--- roughly 40 s per megapixel -- against an estimate of 3-8 s. Images are now
-capped at 768 px wide, which lands near 12 s; a targeted crop is 4.2 s. This is
-the same failure Phase 5 hit with OCR, in a different subsystem. Contract:
-`docs/architecture/15-phase10c-vision.md`.
+10C.2 put a second llama-server on :8082 with Qwen2.5-VL-3B. Measured on the
+GPU: a full-resolution screenshot is **4.5 s**, ~2.2 s per megapixel, and the
+design's 3-8 s estimate was right. Images are capped at 1280 px (2.0 s).
+
+That measurement was published wrong first. The initial run gave 83 s because
+llama-server had silently fallen back to CPU -- an 18x slowdown that announced
+itself as one log line and then behaved normally. Making that loud is now a
+requirement for 10C.3. Contract: `docs/architecture/15-phase10c-vision.md`.
 
 10B so far: speech on the bus (10B.1), the live subtitle (10B.2), the
 amplitude-driven mouth (10B.3), and the female voice (10B.4 -- which turned out

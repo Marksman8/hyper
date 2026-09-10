@@ -454,26 +454,30 @@ class VLMConfig(_Section):
     # at 3-8 seconds for a screen question and the estimate is not yet measured.
     timeout_s: float = Field(default=60.0, gt=0.0, le=600.0)
     max_tokens: int = Field(default=512, gt=0, le=4096)
-    # **The most important number in this section.** Measured on this machine
-    # with Qwen2.5-VL-3B, latency is roughly linear in pixel count at ~40
-    # seconds per megapixel:
+    # Measured on this machine with Qwen2.5-VL-3B, **on the GPU**, cold (no
+    # prompt cache):
     #
-    #     1920x1080  (2.07 MP)   83.2 s
-    #      960x540   (0.52 MP)   20.9 s
-    #      640x360   (0.23 MP)    9.8 s
-    #      480x270   (0.13 MP)    6.7 s
-    #      400x200   (0.08 MP)    4.2 s
+    #     1920x1080  (2.07 MP)   4.53 s
+    #     1536x864   (1.33 MP)   2.88 s
+    #     1280x720   (0.92 MP)   2.02 s
+    #     1024x576   (0.59 MP)   1.44 s
+    #      768x432   (0.33 MP)   0.76 s
     #
-    # The Phase 10 design estimated 3-8 s for a screen question. That is only
-    # true of a small image, so images are downscaled to this width before
-    # being sent. 768 keeps a full-width screenshot near 12 s while leaving
-    # window titles and headings legible; small body text needs a crop, which
-    # is what the targeted-crop path in 10C.12 is for.
+    # Roughly linear at ~2.2 seconds per megapixel. A repeat of the SAME image
+    # is 0.3-0.5 s at any size, because llama.cpp caches the image tokens --
+    # which makes re-observing an unchanged screen nearly free, and matters to
+    # 10C.4's trigger policy.
     #
-    # This is the same failure Phase 5 hit with OCR -- 42 s per screenshot
-    # because nothing capped the resolution -- arriving a second time in a
-    # different subsystem. Capping at the edge is the fix in both.
-    max_image_width: int = Field(default=768, ge=128, le=3840)
+    # 1280 is the default: 2 s cold, most UI text still legible, and full
+    # resolution buys detail at 2.2x the cost. Raise it for a task that needs
+    # small body text; the whole screen at 1920 is still only 4.5 s.
+    #
+    # **This number was briefly wrong.** The first measurement gave 83 s at
+    # full resolution and set the cap at 768 -- but llama-server had silently
+    # fallen back to CPU, so it measured a path AURA does not use. 10C.3 makes
+    # that failure loud, because an 18x slowdown that announces itself as
+    # nothing is worse than one that crashes.
+    max_image_width: int = Field(default=1280, ge=128, le=3840)
 
     def resolved_api_key(self) -> str:
         if self.api_key:

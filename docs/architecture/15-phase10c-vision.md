@@ -43,8 +43,8 @@ hardware eviction is the ordinary state, not an edge case.
 
 | | |
 |---|---|
-| Language model | `llama-server` on **:8081**, 3.3 GB |
-| Vision model | `llama-server --mmproj` on **:8082**, ~2.9 GB |
+| Language model | `llama-server` on **:8081**, ~3143 MiB measured |
+| Vision model | `llama-server --mmproj` on **:8082**, 4226 MiB measured |
 
 Separate processes on separate ports, deliberately: evicting vision in 10C.3 is
 then *stopping a process*, not unloading weights inside the server AURA is
@@ -60,47 +60,100 @@ script refuses to run without both.
 ### The model
 
 `Qwen2.5-VL-3B-Instruct` Q4_K_M with a **Q8_0** projector: 1.93 GB + 0.84 GB =
-2.77 GB on disk, ~3.2 GB resident. Q8_0 rather than F16 for the projector saves
+2.77 GB on disk, **4226 MiB resident** (measured; the 3.2 GB estimate was low). Q8_0 rather than F16 for the projector saves
 0.5 GB of VRAM — a tenth of the budget — for no accuracy anyone has shown on
 screen reading.
 
 The 7B is meaningfully better at dense UI and is in the catalogue, but leaves
 ~2 GB on this card, which is not enough for the display plus anything else.
 
-## 4. **The measurement that changes the design**
+## 4. The measurement, and the one I got wrong first
 
-The Phase 10 design estimated **3–8 s** for a screen question. Measured, on
-this machine, with the model above:
+The Phase 10 design estimated **3–8 s** for a screen question. Measured on the
+GPU, cold (no prompt cache):
 
 | Image | Pixels | Latency |
 |---|---|---|
-| 1920×1080 | 2.07 MP | **83.2 s** |
-| 960×540 | 0.52 MP | 20.9 s |
-| 640×360 | 0.23 MP | 9.8 s |
-| 480×270 | 0.13 MP | 6.7 s |
-| 400×200 crop | 0.08 MP | 4.2 s |
+| 1920×1080 | 2.07 MP | 4.53 s |
+| 1536×864 | 1.33 MP | 2.88 s |
+| 1280×720 | 0.92 MP | 2.02 s |
+| 1024×576 | 0.59 MP | 1.44 s |
+| 768×432 | 0.33 MP | 0.76 s |
 
-**Roughly linear at ~40 seconds per megapixel.** A full-resolution screenshot
-is not a slow call, it is an unusable one — 83 seconds is longer than most
-people will wait for anything, and it would hold the GPU for the whole of it.
+Roughly linear at **~2.2 seconds per megapixel**. The design's estimate was
+right.
 
-The estimate was only ever true of a small image. So `vision.vlm.max_image_width`
-defaults to **768**, which puts a full-width screenshot near 12 s and keeps
-window titles and headings legible. Small body text needs a crop, which is
-exactly what the targeted-crop path in 10C.12 is for — and at 4.2 s that path
-is comfortably viable.
+A repeat of the *same* image is 0.3–0.5 s at any size, because llama.cpp caches
+the image tokens. Re-observing an unchanged screen is therefore nearly free,
+which matters to 10C.4: the expensive thing is a screen that keeps changing,
+not a screen being looked at often.
 
-> This is the **same failure Phase 5 hit with OCR** — 42 s per screenshot
-> because nothing capped the resolution — arriving a second time in a different
-> subsystem. Capping at the edge is the fix in both, and it is worth stating as
-> a rule rather than a fix: *anything that scales with pixel count gets a
-> resolution cap at the point of capture, not a note in a docstring.*
+`vision.vlm.max_image_width` defaults to **1280** — 2 s cold, most UI text
+still legible, and full resolution buys detail at 2.2× the cost.
 
-### Consequence for 10C.4
+### The measurement I published first was wrong
 
-The trigger policy is not merely "is this worth a VLM call" but "at what
-resolution". A change-detection trigger should send a crop of what changed, not
-the screen. That is now a requirement rather than an optimisation.
+10C.2 recorded 83 s at full resolution and set the cap at 768 on that basis.
+That number was real but measured the wrong thing: `llama-server` had logged
+`failed to initialize CUDA: no CUDA-capable device is detected` and fallen back
+to CPU. The GPU was idle at 0 MiB throughout.
+
+The cause was the launch path, not the machine — a nested PowerShell invocation
+that could not see the device. Started directly, `llama-server --list-devices`
+reports the RTX 5060 with 7 GB free and the model loads to 3830 MiB of VRAM.
+
+**CPU is roughly 18× slower than GPU here**, and nothing in the stack said so.
+The server logged one line at startup and then served requests normally, at
+1/18th speed, for as long as anyone cared to use it. That is the failure worth
+taking seriously — not the slowness, but that a silent fallback is
+indistinguishable from a slow model.
+
+> Making that loud is a requirement for 10C.3, which now has to know *where*
+> a model is resident rather than only *whether* it is.
+
+## 4a. **They co-reside.** The premise for 10C.3 was wrong
+
+The Phase 10 design states:
+
+> 3.07 GB LLM + ~3.2 GB VLM = 6.27 of 7.96 GB VRAM **on a GPU that also drives
+> the display**. The two cannot be co-resident; the ResourceGovernor evicts one
+> to load the other.
+
+Measured, with both servers running and both answering:
+
+| | |
+|---|---|
+| VLM alone | 4226 MiB |
+| **Both loaded** | **7369 MiB of 8151** (90%, 782 MiB free) |
+| Across three alternating rounds | 7371 MiB — flat, no growth |
+| LLM latency | 0.18–0.53 s |
+| VLM latency | 0.48–1.77 s |
+
+Both correct, neither crashed, no leak.
+
+**The assumption that failed is the parenthetical one.** `nvidia-smi` reports
+`display_active: Disabled` and 0 MiB in use at idle: this is a hybrid-graphics
+laptop, the desktop runs on the integrated GPU, and the whole of the RTX 5060 is
+available for compute. The design reasoned about a card that was also painting
+the screen. This one is not.
+
+### What that means for 10C.3
+
+Eviction is no longer the normal path. The governor's job changes from *"swap
+one model for the other"* to:
+
+1. **Know where each model is resident** — GPU or CPU. The silent CUDA fallback
+   above cost 18× and announced itself as one line in a log; that must be
+   visible.
+2. **Watch the headroom.** 782 MiB is thin. Another GPU application — a game, a
+   video call, a training run — takes it, and then eviction genuinely matters.
+3. **Publish `RESOURCE_PRESSURE`** when it gets tight, so subsystems back off
+   before something dies rather than after.
+4. **Evict as a fallback**, not a routine. Paying a model reload on every screen
+   question would be absurd when both fit.
+
+The gate criterion *"VRAM never exceeds budget across 100 swap cycles"* still
+applies, but to a path that is now exceptional rather than constant.
 
 ## 5. What it actually said
 
