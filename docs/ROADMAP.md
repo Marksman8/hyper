@@ -332,16 +332,19 @@ personal cognitive model.
 
 Full design: `docs/architecture/09-phase10-presence.md` (revision 2).
 
-**Status: 10A complete. 10B in progress (4 of 7). 10C, 10D not started.**
+**Status: 10A and 10B complete. 10C, 10D not started.**
 
 10B so far: speech on the bus (10B.1), the live subtitle (10B.2), the
 amplitude-driven mouth (10B.3), and the female voice (10B.4 -- which turned out
 to have been delivered back in Phase 2, so there was nothing to build).
 Contract: `docs/architecture/14-phase10b-speech.md`.
 
-Remaining: `PersonalityEngine` (10B.5), micro-expression clips (10B.6), and
-interrupt-stops-speech (10B.7) -- which is blocked on the barge-in measurement
-in `KNOWN-ISSUES.md` rather than on any code.
+10B.5 added the `PersonalityEngine`, 10B.6 the eight rendered clips, and 10B.7
+interruption -- including the one interrupt that works on this machine: saying
+the wake word over her, which matches a pattern rather than a level and so is
+immune to the echo problem that has defeated three attempts at a loudness
+threshold. That threshold is still unfixed and still unmeasured; the workaround
+does not close it.
 
 10A shipped in five steps: the event bus as a security contract (10A.1), SSE
 transport and the nonce-bound approval path (10A.2), the event catalog with

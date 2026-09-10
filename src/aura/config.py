@@ -334,6 +334,15 @@ class VoiceConfig(_Section):
     # optimisation, it is what lets AURA coexist with a browser.
     idle_unload_s: float = Field(default=180.0, ge=0.0)
 
+    # 10B.7. Saying the wake word over AURA stops her.
+    #
+    # ON by default, and it is the interrupt that actually works on this
+    # machine: it matches a PATTERN rather than a level, so AURA's own voice
+    # coming back through the microphone cannot trigger it however loud the
+    # coupling is. Barge-in by loudness has failed three times here in both
+    # directions -- see docs/KNOWN-ISSUES.md.
+    wake_interrupt: bool = True
+
     wake: WakeConfig = Field(default_factory=WakeConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)

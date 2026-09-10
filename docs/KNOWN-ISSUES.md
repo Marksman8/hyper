@@ -8,8 +8,20 @@ the diagnosis from scratch.
 
 ## 1. Barge-in does not interrupt on this machine
 
-**Status:** open · Deferred 2026-09-05 · Severity: medium (voice is usable, but
-a long answer cannot be cut short by voice)
+**Status:** open, but **worked around** in 10B.7 · Deferred 2026-09-05 ·
+Severity: **low** (there is now a voice route that works; the loudness one
+still does not)
+
+### What changed in 10B.7
+
+**Saying the wake word over her now stops her.** `voice.wake_interrupt`, on by
+default. It matches a *pattern* rather than a level, so AURA's own voice coming
+back through the microphone cannot trigger it however bad the coupling is —
+which sidesteps this entire problem rather than solving it.
+
+The loudness-based path below is **still broken and still unmeasured**. What
+follows is unchanged, and the measurement in "Next steps" is still the thing
+that would settle it.
 
 ### Symptom
 
@@ -61,6 +73,11 @@ separate them** and the current approach cannot be fixed by tuning.
 
 Raise or lower `barge_in_min_rms` again without the measurement from step 1.
 That has now failed twice in opposite directions.
+
+Nor should the wake-word interrupt be taken as a reason to close this. It gives
+the user *a* way to stop her, which is what mattered most; it does not make
+talking over her work, and "stop" spoken mid-reply still does nothing unless it
+follows the wake word.
 
 ### Relevant code
 

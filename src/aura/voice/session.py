@@ -283,6 +283,10 @@ class VoiceSession:
                             self._start_turn(segment.audio, segment.speech_s)
 
                 elif self._state in (VoiceState.THINKING, VoiceState.SPEAKING):
+                    # Two independent ways to cut her off: by loudness, which
+                    # needs a threshold this machine cannot supply, and by
+                    # pattern, which needs none. See _wake_word_interrupt.
+                    self._wake_word_interrupt(frame)
                     self._check_barge_in(frame)
         finally:
             self._shutdown()
@@ -442,9 +446,7 @@ class VoiceSession:
                 return
 
             self._on_text("system", "interrupted")
-            self._interrupted = True
-            self._interrupt.set()
-            self._speaker.stop()
+            self._interrupt_speech("barge_in")
 
     def _maybe_unload_idle(self) -> None:
         """Free STT after a quiet spell (spec section 26).
@@ -510,7 +512,9 @@ class VoiceSession:
                 log.info("voice.stop_command", text=transcript.text)
                 self._on_text("user", transcript.text)
                 self._on_text("system", "stopped")
-                self._speaker.stop()
+                # Through the same route as every other interruption, so the
+                # overlay learns about this one too. It did not, before.
+                self._interrupt_speech("stop_command")
                 self._follow_up_ok = True
                 return
 
@@ -626,6 +630,74 @@ class VoiceSession:
                 self._reporter.chunk(text, envelope(chunk.audio, chunk.sample_rate))
             self._speaker.play(chunk)
         return produced
+
+    # -- interruption (10B.7) --------------------------------------------------
+
+    def _interrupt_speech(self, method: str) -> bool:
+        """Stop talking, and say so. The one route out of speaking.
+
+        Every way of cutting AURA off ends here -- barge-in by loudness, the
+        wake word spoken over her, a stop command -- so they cannot drift into
+        behaving differently. Before this existed each path stopped the speaker
+        and did its own subset of the rest, and none of them told anyone it had
+        happened.
+
+        The order matters. The speaker stops first, because that is the part
+        the user is waiting for; everything after it is bookkeeping and none of
+        it should delay silence by a network round trip.
+
+        Returns False if speech was already interrupted, so a detector firing
+        twice does not publish twice.
+        """
+        if self._interrupt.is_set():
+            return False
+
+        self._interrupted = True
+        self._interrupt.set()
+        self._speaker.stop()
+
+        # SPEECH_ENDED(completed=False) rather than True: the overlay clears a
+        # cut-off line in 400 ms instead of holding it up to be read, because a
+        # fragment left on screen presents itself as the final word.
+        self._end_speech(completed=False)
+        self._reporter.interrupted(method)
+        log.info("voice.interrupted", method=method)
+        return True
+
+    def _wake_word_interrupt(self, frame: AudioArray) -> None:
+        """Saying the wake word over AURA stops her.
+
+        **This is the interrupt that does not depend on a threshold.**
+
+        Barge-in by loudness has failed three times on this machine, in both
+        directions, and `KNOWN-ISSUES.md` records why: AURA's own voice reaches
+        the microphone at RMS 0.024-0.040, and if the user's voice arrives at a
+        similar level then no threshold can separate them. That is a property
+        of the room and the hardware, not a number to tune.
+
+        The wake word sidesteps it entirely by matching a *pattern* rather than
+        a level. AURA's own speech does not sound like "hey jarvis", however
+        loudly it comes back through the microphone, so echo cannot trigger
+        this however bad the coupling is.
+
+        Cheap, because the detector is already loaded and already running --
+        it was simply never fed during playback.
+        """
+        if not self._cfg.wake_interrupt or self._state is not VoiceState.SPEAKING:
+            return
+        if self._interrupt.is_set():
+            return
+        if self._wake.process(frame) is None:
+            return
+
+        # Reset, or the scores that fired stay in the buffer and immediately
+        # re-trigger against the next reply.
+        self._wake.reset()
+        if self._interrupt_speech("wake_word"):
+            self._on_text("system", "interrupted")
+            # The user said the wake word, so they have something to ask.
+            # Reopening the microphone is the whole point of interrupting.
+            self._follow_up_ok = True
 
     # -- micro-expressions (10B.6) --------------------------------------------
 

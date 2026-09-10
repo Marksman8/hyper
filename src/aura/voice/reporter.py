@@ -87,6 +87,16 @@ class SpeechReporter:
     def ended(self, *, completed: bool) -> None:
         self._put({"type": "speech_ended", "completed": completed})
 
+    def interrupted(self, method: str) -> None:
+        """The user cut AURA off (10B.7).
+
+        Carries HOW it happened -- barge_in, wake_word, stop_command -- and
+        nothing else. Which mechanism worked is the single most useful thing to
+        know when someone reports that stopping her did not work, and it is the
+        one fact `KNOWN-ISSUES.md` has been missing.
+        """
+        self._put({"type": "user_interrupted", "method": method[:32]})
+
     # -- plumbing ------------------------------------------------------------
 
     def _put(self, payload: dict[str, Any]) -> None:

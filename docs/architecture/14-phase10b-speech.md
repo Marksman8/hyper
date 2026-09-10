@@ -1,6 +1,6 @@
 # 10B — Speech you can see
 
-Status: **10B.1–10B.6 complete** · 10B.7 outstanding · Date: 2026-09-10
+Status: **10B complete** (10B.1–10B.7) · Date: 2026-09-10
 
 ---
 
@@ -214,6 +214,56 @@ clips are committed, so it is needed only to change the catalogue, and adding a
 compiler requirement to every checkout for one build script would be the wrong
 trade.
 
+## 7c. Interruption (10B.7)
+
+Two halves, and only one was ever blocked.
+
+**The response** needed no measurement and had never been built. Nothing
+published `USER_INTERRUPTED`, so the overlay was never told AURA had been cut
+off — and each of the three ways to stop her did its own partial subset of the
+work. There is now one route out of speaking, and every path goes through it:
+
+```
+barge-in (loudness) ─┐
+wake word (pattern) ─┼──▶ _interrupt_speech(method)
+stop command        ─┘         │
+                    stop the speaker    ← what the user is waiting for
+                    SPEECH_ENDED(completed=False)
+                    USER_INTERRUPTED(method)
+```
+
+Order matters: the speaker stops first, and everything after it is bookkeeping
+that must not delay silence by a network round trip. It is idempotent, so two
+detectors firing together produce one interruption.
+
+`completed=False` is what makes the subtitle clear in 400 ms rather than being
+held up to be read — a cut-off fragment should not present itself as the final
+word.
+
+### The interrupt that needs no threshold
+
+**Saying the wake word over her stops her**, and this is the one that actually
+works on this machine.
+
+Loudness-based barge-in has failed three times here in both directions.
+`KNOWN-ISSUES.md` records why, and it is not a tuning problem: AURA's own voice
+reaches the microphone at RMS 0.024–0.040, and if the user's voice arrives at a
+similar level then no threshold can separate them. That is a property of the
+room and the hardware.
+
+The wake word sidesteps it entirely by matching a **pattern** rather than a
+level. Her own speech does not sound like "hey jarvis" however loudly it comes
+back through the microphone, so echo cannot trigger it however bad the coupling
+is. A test asserts the implementation consults no level at all — no `rms`, no
+threshold — so it cannot quietly regress into the approach that failed.
+
+It was cheap: the detector was already loaded and already running, and was
+simply never fed during playback.
+
+**The loudness path is still broken**, and the measurement that would settle it
+is still outstanding. This gives the user a way to stop her; it does not make
+talking over her work.
+
 ## 8. The bug a real screen found
 
 `resize()` moves the bottom and right edges and leaves the top-left alone, so a
@@ -231,13 +281,6 @@ grows with the text.
 
 ## 9. Outstanding
 
-| | | Note |
-|---|---|---|
-| 10B.7 | Interrupt stops speech | **Blocked on the barge-in measurement** — see `KNOWN-ISSUES.md` |
-
-10B.7 is the one to watch. Saying "stop" does not currently interrupt, three
-threshold attempts have failed in opposite directions, and the missing number
-is the user's speech level at the microphone. If it overlaps the measured echo
-floor (0.024–0.040 RMS), no threshold works and the fix is
-wake-word-during-playback, which rejects AURA's own voice by *pattern* rather
-than by loudness.
+Nothing in 10B. The one carried limitation is recorded above and in
+`KNOWN-ISSUES.md`: interrupting by talking over her still does not work, and
+the fix for that is a measurement rather than code.
