@@ -1,6 +1,6 @@
 # 10B — Speech you can see
 
-Status: **10B.1–10B.5 complete** · 10B.6–10B.7 outstanding · Date: 2026-09-10
+Status: **10B.1–10B.6 complete** · 10B.7 outstanding · Date: 2026-09-10
 
 ---
 
@@ -176,6 +176,44 @@ them would make every new visual state a personality question.
 settings produced **6 micro-expressions — 10% of turns**, none repeating
 consecutively.
 
+## 7b. The clips (10B.6)
+
+Eight WAVs in `assets/micro/`, 332 KB, committed. Rendered once by
+`scripts/render_micro_expressions.py` from language-specific Piper voices that
+are deleted afterwards — 140 MB of models to produce 332 KB of audio is not a
+thing to keep.
+
+| Decision | Why |
+|---|---|
+| Pre-rendered, not synthesised at runtime | `en_US-amy-medium` cannot pronounce 了解, and a second TTS model is RAM this machine does not have |
+| Female voice in both languages | `hi_fi_captain` speaker 0 and SIWIS. A male voice ahead of AURA's own would sound like a second person in the room |
+| Loudness matched to her measured level | Otherwise a clip sounds spliced in rather than spoken |
+| Resampled to 22,050 Hz | Queued into the same speaker as the reply; a rate mismatch plays at the wrong pitch |
+| Committed to the repo | It is what makes "every sound she can make is auditable" true rather than aspirational |
+
+**A missing clip makes its expression unavailable**, silently and by design.
+The catalogue lists what AURA *could* say; the library is what she has audio
+for, and `restrict_to()` takes the intersection at startup. Without that, a
+phrase added and never rendered would produce a silent pause mid-reply — a bug
+that leaves no trace in a log and is completely obvious in a room.
+
+Each clip gets its own subtitle line *and its own envelope*, so the mouth moves
+through the interjection rather than sitting shut through it. Measured: 12–30
+open frames per clip.
+
+A micro-expression only ever **leads** a reply, never appears between two
+sentences, where it would read as an interruption rather than an
+acknowledgement.
+
+### The build dependency
+
+Piper hands Japanese to `pyopenjtalk`, which builds from source and needs cmake
+and a C++ toolchain — it fails to install here. `pyopenjtalk-plus` ships a
+Windows wheel and works. It is deliberately **not** a project dependency: the
+clips are committed, so it is needed only to change the catalogue, and adding a
+compiler requirement to every checkout for one build script would be the wrong
+trade.
+
 ## 8. The bug a real screen found
 
 `resize()` moves the bottom and right edges and leaves the top-left alone, so a
@@ -195,7 +233,6 @@ grows with the text.
 
 | | | Note |
 |---|---|---|
-| 10B.6 | Pre-rendered micro-expressions, glossed in the subtitle | Clips are fixed WAVs so pronunciation is right and every phrase is auditable |
 | 10B.7 | Interrupt stops speech | **Blocked on the barge-in measurement** — see `KNOWN-ISSUES.md` |
 
 10B.7 is the one to watch. Saying "stop" does not currently interrupt, three

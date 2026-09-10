@@ -211,6 +211,23 @@ class PersonalityEngine:
 
         return time.monotonic()
 
+    def restrict_to(self, available: frozenset[str]) -> None:
+        """Limit the catalogue to expressions that actually have audio (10B.6).
+
+        Called by the voice process once the clip library has loaded. Without
+        it, a phrase added to the catalogue but never rendered would produce a
+        silent pause in the middle of a reply -- a bug that is invisible in a
+        log and obvious in a room.
+        """
+        before = len(self._catalogue)
+        self._catalogue = tuple(e for e in self._catalogue if e.id in available)
+        if len(self._catalogue) != before:
+            log.info(
+                "personality.restricted",
+                usable=[e.id for e in self._catalogue],
+                dropped=before - len(self._catalogue),
+            )
+
     def candidates(self, moment: Moment) -> list[MicroExpression]:
         """Everything that could fit, before any dice are rolled."""
         return [

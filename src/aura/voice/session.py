@@ -30,14 +30,16 @@ from aura.logging import get_logger, new_request_id
 from aura.voice.audio.capture import Microphone, RingBuffer
 from aura.voice.audio.cues import dismiss_cue, follow_up_cue, wake_cue
 from aura.voice.audio.playback import Speaker
+from aura.voice.clips import ClipLibrary
 from aura.voice.core_client import CoreClient, CoreUnavailableError
 from aura.voice.envelope import envelope
+from aura.voice.personality import CATALOGUE, Moment, build_engine
 from aura.voice.reporter import SpeechReporter
 from aura.voice.stt.base import STTProvider
 from aura.voice.tts.base import TTSProvider
 from aura.voice.tts.normalize import for_speech
 from aura.voice.tts.piper import SentenceStreamer
-from aura.voice.types import SAMPLE_RATE, AudioArray, TurnTimings, VoiceState
+from aura.voice.types import SAMPLE_RATE, AudioArray, SpeechChunk, TurnTimings, VoiceState
 from aura.voice.vad import BargeInDetector, Endpointer
 from aura.voice.wake.base import WakeWordDetector
 
@@ -151,6 +153,11 @@ class VoiceSession:
         # exactly once however the turn unwinds: finished, interrupted, or
         # thrown out of.
         self._speech_open = False
+        # 10B.5/10B.6. Built here, restricted to what has audio in run().
+        # Either being None simply means no micro-expressions, which is a
+        # supported state and the one an unrendered checkout is in.
+        self._personality = build_engine(settings)
+        self._clips: ClipLibrary | None = None
 
         self._state = VoiceState.SLEEP
         self._stop = threading.Event()
@@ -222,6 +229,12 @@ class VoiceSession:
         self._endpointer.vad.load()
         self._mic.start()
         self._reporter.start()
+        # The catalogue lists what AURA could say; the library is what she has
+        # audio for. Restricting to the intersection means a phrase added but
+        # never rendered is inert rather than a silent pause mid-reply.
+        self._clips = ClipLibrary()
+        self._clips.load(CATALOGUE)
+        self._personality.restrict_to(self._clips.available)
         self._set_state(VoiceState.SLEEP)
 
         try:
@@ -595,6 +608,11 @@ class VoiceSession:
                     self._set_state(VoiceState.SPEAKING)
                     self._on_text("aura", text)
                     self._begin_speech(len(text))
+                    # 10B.6. Before the first sentence of a reply and never
+                    # mid-reply: an interjection between two sentences reads
+                    # as an interruption rather than as an acknowledgement.
+                    if first:
+                        self._maybe_micro_expression()
                 else:
                     self._on_text("aura", text)
                 # Published when the audio for this sentence starts, not when
@@ -608,6 +626,40 @@ class VoiceSession:
                 self._reporter.chunk(text, envelope(chunk.audio, chunk.sample_rate))
             self._speaker.play(chunk)
         return produced
+
+    # -- micro-expressions (10B.6) --------------------------------------------
+
+    def _maybe_micro_expression(self) -> None:
+        """Prepend a short fixed phrase, if the personality layer offers one.
+
+        Queued ahead of the reply's own audio, so it is heard first. The
+        subtitle gets the phrase and its English gloss as a chunk of its own,
+        which is what makes it comprehensible with the sound off -- the case
+        this whole milestone exists for.
+
+        Everything here is best-effort. A missing clip, an unreadable file or a
+        personality layer that is switched off all produce the same outcome:
+        the reply is spoken exactly as it would have been anyway.
+        """
+        if self._personality is None or self._clips is None:
+            return
+        try:
+            choice = self._personality.select(Moment.ACKNOWLEDGING)
+            if choice is None:
+                return
+            loaded = self._clips.get(choice.id)
+            if loaded is None:
+                return
+
+            audio, rate = loaded
+            self._speaker.play(SpeechChunk(audio=audio, sample_rate=rate, text=choice.text))
+            # Its own subtitle line and its own envelope, so the mouth moves
+            # for the interjection too rather than sitting shut through it.
+            self._reporter.chunk(choice.subtitle(), envelope(audio, rate))
+            log.info("voice.micro_expression", expression=choice.id, gloss=choice.gloss)
+        except Exception as exc:
+            # A garnish must never cost the answer.
+            log.debug("voice.micro_expression_failed", error=str(exc))
 
     # -- speech lifecycle (10B.1) --------------------------------------------
 
