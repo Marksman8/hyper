@@ -316,6 +316,11 @@ class ClientEvent(BaseModel):
     text: str = Field(default="", max_length=1_000)
     # SPEECH_ENDED only. Whether she finished or was cut off.
     completed: bool = True
+    # SPEECH_CHUNK only (10B.3). One digit per 20 ms of audio, driving the
+    # avatar's mouth. Constrained to digits by the pattern rather than merely
+    # capped: an envelope is a fixed alphabet, so anything else is a caller
+    # bug and there is no reason to let it reach a consumer.
+    envelope: str = Field(default="", max_length=400, pattern=r"^[0-9]*$")
 
 
 class ApprovalRedeem(BaseModel):

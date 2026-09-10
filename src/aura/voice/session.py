@@ -31,6 +31,7 @@ from aura.voice.audio.capture import Microphone, RingBuffer
 from aura.voice.audio.cues import dismiss_cue, follow_up_cue, wake_cue
 from aura.voice.audio.playback import Speaker
 from aura.voice.core_client import CoreClient, CoreUnavailableError
+from aura.voice.envelope import envelope
 from aura.voice.reporter import SpeechReporter
 from aura.voice.stt.base import STTProvider
 from aura.voice.tts.base import TTSProvider
@@ -599,7 +600,12 @@ class VoiceSession:
                 # Published when the audio for this sentence starts, not when
                 # the sentence was synthesised: the subtitle should track what
                 # is being heard, and synthesis runs ahead of playback.
-                self._reporter.chunk(text)
+                #
+                # The envelope rides along with it (10B.3). Piper yields a
+                # sentence's audio in one piece, so the samples that drive the
+                # mouth are already in hand here -- computing it costs no
+                # latency and needs no second event.
+                self._reporter.chunk(text, envelope(chunk.audio, chunk.sample_rate))
             self._speaker.play(chunk)
         return produced
 

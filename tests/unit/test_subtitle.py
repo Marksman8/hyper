@@ -52,6 +52,12 @@ class FakeOverlay:
         self.resized = _NullSignal()
         self.moves: list[tuple[int, int]] = []
         self._h = SIZE[1]
+        self.mouth = 0.0
+        self.mouth_history: list[float] = []
+
+    def set_mouth(self, openness: float) -> None:
+        self.mouth = openness
+        self.mouth_history.append(openness)
 
     def set_subtitle(self, text: str) -> None:
         self.subtitle = text
@@ -393,6 +399,128 @@ def test_re_anchoring_does_not_count_as_a_move(controller: Any) -> None:
         ctl._reanchor()
 
     assert ctl._policy.move_count == before
+
+
+# ===========================================================================
+# The mouth (10B.3)
+# ===========================================================================
+
+
+def _drive(ctl: PresenceController, frames: int) -> None:
+    """Step the mouth clock without waiting on a real one."""
+    for _ in range(frames):
+        ctl._advance_mouth()
+
+
+def test_a_sentence_with_an_envelope_moves_the_mouth(controller: Any) -> None:
+    ctl, overlay = controller
+    ctl.on_event({"type": "speech_started", "payload": {"length": 10}})
+    ctl.on_event(
+        {"type": "speech_chunk", "payload": {"text": "Hello there.", "envelope": "0369"}}
+    )
+
+    _drive(ctl, 4)
+
+    assert overlay.mouth_history[-4:] == pytest.approx([0.0, 1 / 3, 2 / 3, 1.0], abs=0.01)
+
+
+def test_the_mouth_closes_when_the_envelope_runs_out(controller: Any) -> None:
+    """Otherwise she finishes a sentence with her mouth hanging open."""
+    ctl, overlay = controller
+    _speak_with(ctl, "Done.", "999")
+
+    _drive(ctl, 10)
+
+    assert overlay.mouth == 0.0
+    assert ctl._mouth_timer is None
+
+
+def test_a_sentence_without_an_envelope_leaves_the_mouth_shut(controller: Any) -> None:
+    """A sentence spoken outside the normal turn flow has no PCM to measure.
+    A still mouth is a better answer than a fabricated one."""
+    ctl, overlay = controller
+    _speak_with(ctl, "Sorry, I didn't catch that.", "")
+
+    assert ctl._mouth_timer is None
+    assert overlay.mouth == 0.0
+
+
+def test_a_new_sentence_restarts_the_mouth(controller: Any) -> None:
+    ctl, _ = controller
+    _speak_with(ctl, "First.", "999")
+    _drive(ctl, 2)
+
+    _speak_with(ctl, "Second.", "123456")
+
+    assert ctl._frame == 0
+    assert ctl._envelope == "123456"
+
+
+def test_speech_ending_closes_the_mouth(controller: Any) -> None:
+    ctl, overlay = controller
+    _speak_with(ctl, "A sentence.", "99999999")
+    _drive(ctl, 2)
+
+    ctl.on_event({"type": "speech_ended", "payload": {"completed": True}})
+
+    assert overlay.mouth == 0.0
+    assert ctl._mouth_timer is None
+
+
+def test_an_interruption_closes_the_mouth(controller: Any) -> None:
+    """Cut off mid-sentence, she must not be left mid-syllable."""
+    ctl, overlay = controller
+    _speak_with(ctl, "I was saying something", "99999999")
+    _drive(ctl, 3)
+
+    ctl.on_event({"type": "speech_ended", "payload": {"completed": False}})
+
+    assert overlay.mouth == 0.0
+
+
+def test_privacy_closes_the_mouth(controller: Any) -> None:
+    ctl, overlay = controller
+    _speak_with(ctl, "Something.", "99999999")
+    _drive(ctl, 2)
+
+    ctl.on_event({"type": "presence_state", "payload": {"state": "private"}})
+
+    assert overlay.mouth == 0.0
+    assert ctl._mouth_timer is None
+
+
+def test_a_reconnect_closes_the_mouth(controller: Any) -> None:
+    ctl, overlay = controller
+    _speak_with(ctl, "Mid-sentence when the link dropped.", "99999999")
+    _drive(ctl, 2)
+
+    ctl.on_event({"type": "snapshot", "payload": {"presence_state": "idle"}})
+
+    assert overlay.mouth == 0.0
+    assert ctl._mouth_timer is None
+
+
+def test_a_malformed_envelope_does_not_raise(controller: Any) -> None:
+    """The field is validated at the API boundary; a renderer is the wrong
+    place to raise about it."""
+    ctl, overlay = controller
+    _speak_with(ctl, "Text.", "12x4")
+
+    _drive(ctl, 4)
+    # The non-digit read as a closed mouth rather than raising...
+    assert overlay.mouth_history[-2] == 0.0
+    # ...and the digits either side were rendered normally.
+    assert overlay.mouth_history[-1] == pytest.approx(4 / 9, abs=0.01)
+
+    # One more step runs off the end, which is what closes it.
+    _drive(ctl, 1)
+    assert overlay.mouth == 0.0
+    assert ctl._mouth_timer is None
+
+
+def _speak_with(ctl: PresenceController, text: str, env: str) -> None:
+    ctl.on_event({"type": "speech_started", "payload": {"length": len(text)}})
+    ctl.on_event({"type": "speech_chunk", "payload": {"text": text, "envelope": env}})
 
 
 # ===========================================================================

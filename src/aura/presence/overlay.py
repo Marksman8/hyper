@@ -150,6 +150,16 @@ class PresenceOverlay(QWidget):
         self._resize_for_content()
         self.update()
 
+    def set_mouth(self, openness: float) -> None:
+        """Mouth position, 0 shut to 1 open (10B.3).
+
+        No `update()` here: the avatar marks itself dirty and the existing
+        paint timer picks it up on the next tick. Repainting per call would
+        mean 50 forced repaints a second during speech, which is exactly the
+        cost the advance-returns-changed design exists to avoid.
+        """
+        self._avatar.set_mouth(openness)
+
     @property
     def subtitle(self) -> str:
         """What is on screen now. Read by the controller to size the hold."""

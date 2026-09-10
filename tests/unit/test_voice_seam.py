@@ -75,15 +75,28 @@ def test_aura_core_does_not_import_voice() -> None:
     Core stays a 69 MB torch-free process that restarts in under a second. If
     the API, orchestrator, memory or model layers start importing aura.voice,
     that property is gone and the two-process design has quietly collapsed.
+
+    Checked against the import statements rather than the file text. It was a
+    substring search until `core/envelope.py` arrived carrying a docstring that
+    explains *why* it does not import the voice package -- and was failed for
+    saying so. Prose about a boundary is not a breach of it, and a test that
+    cannot tell the difference discourages the comment that would have kept the
+    next person on the right side of the line.
     """
     core_dirs = ("api", "core", "memory", "models", "security", "runtime")
     offenders: list[str] = []
     for name in core_dirs:
         for path in (SRC / name).rglob("*.py"):
-            source = path.read_text(encoding="utf-8")
-            if "aura.voice" in source:
-                offenders.append(str(path.relative_to(SRC)))
-    assert not offenders, f"AURA Core imports voice code in: {offenders}"
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                imported: list[str] = []
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    imported.append(node.module)
+                elif isinstance(node, ast.Import):
+                    imported += [a.name for a in node.names]
+                if any(m == "aura.voice" or m.startswith("aura.voice.") for m in imported):
+                    offenders.append(str(path.relative_to(SRC)))
+    assert not offenders, f"AURA Core imports voice code in: {sorted(set(offenders))}"
 
 
 def test_voice_extra_is_not_a_core_dependency() -> None:

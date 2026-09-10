@@ -20,6 +20,8 @@ from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import QApplication
 
 from aura.config import get_settings
+from aura.core.envelope import FRAME_MS as ENVELOPE_FRAME_MS
+from aura.core.envelope import openness
 from aura.core.presence import PresenceState
 from aura.logging import configure_logging, get_logger
 from aura.presence.avatar.silhouette import SilhouetteAvatar
@@ -83,6 +85,10 @@ class PresenceController(QObject):
         self.tray: Any = None
         # Clears the last spoken line once it has had time to be read.
         self._subtitle_timer: QTimer | None = None
+        # Drives the mouth through one sentence's amplitude envelope.
+        self._mouth_timer: QTimer | None = None
+        self._envelope = ""
+        self._frame = 0
 
         overlay.dragged.connect(self._on_dragged)
         overlay.resized.connect(self._reanchor)
@@ -120,6 +126,7 @@ class PresenceController(QObject):
             # asserting something it cannot know.
             self._cancel_subtitle_clear()
             self._overlay.set_subtitle("")
+            self._stop_mouth()
             return
 
         if kind == "presence_state":
@@ -133,7 +140,7 @@ class PresenceController(QObject):
         elif kind == "speech_started":
             self._speech_started()
         elif kind == "speech_chunk":
-            self._speech_chunk(str(body.get("text", "")))
+            self._speech_chunk(str(body.get("text", "")), str(body.get("envelope", "")))
         elif kind == "speech_ended":
             self._speech_ended(completed=bool(body.get("completed", True)))
 
@@ -150,7 +157,7 @@ class PresenceController(QObject):
         self._cancel_subtitle_clear()
         self._overlay.set_subtitle("")
 
-    def _speech_chunk(self, text: str) -> None:
+    def _speech_chunk(self, text: str, envelope: str = "") -> None:
         """One sentence, replacing the last.
 
         Deliberately not accumulated. A subtitle holding a whole reply grows
@@ -164,6 +171,53 @@ class PresenceController(QObject):
             return
         self._cancel_subtitle_clear()
         self._overlay.set_subtitle(text)
+        self._start_mouth(envelope)
+
+    # -- the mouth (10B.3) -----------------------------------------------------
+
+    def _start_mouth(self, envelope: str) -> None:
+        """Replay a sentence's amplitude against a local clock.
+
+        The envelope arrives with the sentence, at the moment that sentence's
+        audio begins, so playing it from now is as close to in-sync as two
+        processes get without a shared clock. Approximate is the right target:
+        a mouth that moves while she talks and stops when she stops reads as
+        correct, and nobody is lip-reading a silhouette.
+        """
+        self._stop_mouth()
+        if not envelope:
+            # No envelope is not an error -- a sentence spoken outside the
+            # normal turn flow has no PCM to measure. A still mouth is a better
+            # answer than a fabricated one.
+            return
+
+        self._envelope = envelope
+        self._frame = 0
+        timer = QTimer(self)
+        timer.timeout.connect(self._advance_mouth)
+        timer.start(ENVELOPE_FRAME_MS)
+        self._mouth_timer = timer
+
+    def _advance_mouth(self) -> None:
+        if self._frame >= len(self._envelope):
+            self._stop_mouth()
+            return
+        self._overlay.set_mouth(openness(self._envelope, self._frame))
+        self._frame += 1
+
+    def _stop_mouth(self) -> None:
+        """Close the mouth and stop the clock.
+
+        Called on a new sentence, on speech ending, on privacy, and on a
+        reconnect. An open mouth left behind by any of those reads as a frozen
+        avatar rather than a finished one.
+        """
+        if self._mouth_timer is not None:
+            self._mouth_timer.stop()
+            self._mouth_timer = None
+        self._envelope = ""
+        self._frame = 0
+        self._overlay.set_mouth(0.0)
 
     def _speech_ended(self, *, completed: bool) -> None:
         """Hold the last line long enough to read, then clear.
@@ -176,6 +230,7 @@ class PresenceController(QObject):
         cut off, and leaving it on screen presents a fragment as if it were the
         final word.
         """
+        self._stop_mouth()
         if not completed:
             self._schedule_subtitle_clear(INTERRUPTED_HOLD_MS)
             return
@@ -214,6 +269,7 @@ class PresenceController(QObject):
             # last thing AURA said before being told to stop.
             self._cancel_subtitle_clear()
             self._overlay.set_subtitle("")
+            self._stop_mouth()
             log.info("presence.hidden", state=str(state))
             self._sync_tray()
             return

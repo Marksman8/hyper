@@ -816,7 +816,7 @@ def _install_routes(app: FastAPI) -> None:
         elif body.type == "speech_started":
             emitter.speech_started(length=body.length)
         elif body.type == "speech_chunk":
-            emitter.speech_chunk(body.text)
+            emitter.speech_chunk(body.text, envelope=body.envelope)
         else:
             emitter.speech_ended(completed=body.completed)
         return {"accepted": True, "seq": state.events.seq}

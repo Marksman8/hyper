@@ -68,9 +68,21 @@ class SpeechReporter:
     def started(self, length: int) -> None:
         self._put({"type": "speech_started", "length": max(0, length)})
 
-    def chunk(self, text: str) -> None:
+    def chunk(self, text: str, envelope: str = "") -> None:
+        """One sentence, with the amplitude envelope that drives the mouth.
+
+        The envelope is optional: a sentence spoken outside the normal turn
+        flow has no PCM in hand at this point, and a still mouth is a better
+        answer than a fabricated one.
+        """
         if text.strip():
-            self._put({"type": "speech_chunk", "text": text[:1000]})
+            self._put(
+                {
+                    "type": "speech_chunk",
+                    "text": text[:1000],
+                    "envelope": envelope[:400],
+                }
+            )
 
     def ended(self, *, completed: bool) -> None:
         self._put({"type": "speech_ended", "completed": completed})

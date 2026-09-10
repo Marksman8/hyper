@@ -43,6 +43,10 @@ MAX_SUMMARY = 400
 # from quietly becoming "whatever the caller wanted on the bus".
 MAX_SPEECH_CHUNK = 1_000
 
+# 400 frames at 20 ms = 8 seconds of mouth. A sentence longer than that is
+# already past the point where the envelope is the interesting problem.
+MAX_ENVELOPE = 400
+
 
 class EventEmitter:
     """Publishes catalogued events. Safe to call with no bus."""
@@ -143,16 +147,23 @@ class EventEmitter:
             EventType.SPEECH_STARTED, {"length": max(0, length)}, session_id=session_id
         )
 
-    def speech_chunk(self, text: str, *, session_id: str | None = None) -> None:
+    def speech_chunk(
+        self, text: str, envelope: str = "", *, session_id: str | None = None
+    ) -> None:
         """One sentence of the reply, as it is spoken.
 
         Published per sentence rather than per audio buffer: a subtitle that
         updated per 20 ms PCM frame would flicker, and the sentence is the unit
         the synthesiser already works in.
+
+        `envelope` carries the amplitude for the mouth (10B.3) -- one digit per
+        20 ms of that sentence's audio. It rides along here rather than
+        streaming, because a bus built to carry metadata should not become an
+        audio sidechannel at 50 Hz. Empty is valid and means a still mouth.
         """
         self._emit(
             EventType.SPEECH_CHUNK,
-            {"text": text[:MAX_SPEECH_CHUNK]},
+            {"text": text[:MAX_SPEECH_CHUNK], "envelope": envelope[:MAX_ENVELOPE]},
             session_id=session_id,
         )
 
