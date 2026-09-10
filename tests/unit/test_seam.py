@@ -147,3 +147,42 @@ def _imported_roots_full(path: Path) -> set[str]:
         elif isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
     return modules
+
+
+# The same discipline for vision-language models (10C.1). llama-server serves
+# a VLM over the SAME OpenAI-compatible endpoint, so the seam is not protecting
+# against a heavy library here -- it is protecting against the request SHAPE
+# leaking upward, which is what would make swapping the backend a refactor.
+VLM_PKG = SRC / "vision" / "vlm"
+
+
+def test_only_the_vlm_package_shapes_a_vlm_request() -> None:
+    """`image_url` and base64 data URIs are protocol details."""
+    offenders: list[str] = []
+    for path in SRC.rglob("*.py"):
+        if VLM_PKG == path.parent or VLM_PKG in path.parents:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for detail in ("image_url", "data:image/", "b64encode"):
+            if detail in source:
+                offenders.append(f"{path.relative_to(SRC)} contains {detail!r}")
+    assert not offenders, "VLM protocol details outside vision/vlm/: " + "; ".join(offenders)
+
+
+def test_nothing_above_the_seam_imports_a_concrete_vlm() -> None:
+    allowed = {"vision/vlm/openai_compat.py", "vision/vlm/factory.py"}
+    offenders = [
+        str(path.relative_to(SRC)).replace("\\", "/")
+        for path in SRC.rglob("*.py")
+        if str(path.relative_to(SRC)).replace("\\", "/") not in allowed
+        and any("vlm.openai_compat" in module for module in _imported_roots_full(path))
+    ]
+    assert not offenders, f"the concrete VLM leaked into: {offenders}"
+
+
+def test_the_vlm_seam_stays_torch_free() -> None:
+    """The whole reason a VLM is served over HTTP rather than loaded in
+    process: torch does not enter this project."""
+    for path in VLM_PKG.rglob("*.py"):
+        leaked = _imported_roots(path) & FORBIDDEN_ROOTS
+        assert not leaked, f"{path.name} imports {sorted(leaked)}"

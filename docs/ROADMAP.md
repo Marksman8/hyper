@@ -332,7 +332,14 @@ personal cognitive model.
 
 Full design: `docs/architecture/09-phase10-presence.md` (revision 2).
 
-**Status: 10A and 10B complete. 10C, 10D not started.**
+**Status: 10A and 10B complete. 10C started (10C.1 of 12). 10D not started.**
+
+10C.1 put the `VLMProvider` seam in: a VLM is served over the *same*
+OpenAI-compatible endpoint AURA already speaks (`llama-server --mmproj`), so
+there is no second inference stack and torch still does not enter. `NullVLM` is
+the default and is a supported configuration rather than a failure -- the
+arithmetic does not allow both models resident, so everything above the seam
+has to work with no VLM at all.
 
 10B so far: speech on the bus (10B.1), the live subtitle (10B.2), the
 amplitude-driven mouth (10B.3), and the female voice (10B.4 -- which turned out

@@ -431,6 +431,42 @@ class PersonalizationConfig(_Section):
     adapt_parameters: bool = True
 
 
+class VLMConfig(_Section):
+    """Phase 10C. The vision-language model.
+
+    **Off by default, and that is a resource fact rather than caution.** The
+    language model holds 3.07 GB of 7.96 GB VRAM on a GPU that also drives the
+    display; a VLM needs roughly 3.2 GB more. They cannot both be resident, so
+    running with no VLM is the normal state and everything above must work in
+    it -- see `NullVLM`.
+    """
+
+    enabled: bool = False
+    provider: str = "openai_compat"
+    # A SECOND llama-server, deliberately: one process per model, so evicting
+    # the VLM is stopping a process rather than unloading weights inside the
+    # one AURA is mid-conversation with.
+    base_url: str = "http://127.0.0.1:8082/v1"
+    model: str = "default"
+    api_key: str = ""
+    api_key_file: str = "var/secrets/vlm_api_token"
+    # Generous next to the LLM's, because a VLM on this hardware is estimated
+    # at 3-8 seconds for a screen question and the estimate is not yet measured.
+    timeout_s: float = Field(default=60.0, gt=0.0, le=600.0)
+    max_tokens: int = Field(default=512, gt=0, le=4096)
+
+    def resolved_api_key(self) -> str:
+        if self.api_key:
+            return self.api_key
+        path = Path(self.api_key_file)
+        path = path if path.is_absolute() else PROJECT_ROOT / path
+        if path.is_file():
+            # utf-8-sig: a file written by Windows PowerShell carries a BOM,
+            # and a BOM inside a token is a 401 that looks like a wrong secret.
+            return path.read_text(encoding="utf-8-sig").strip()
+        return ""
+
+
 class VisionConfig(_Section):
     """Phase 5. What AURA may look at.
 
@@ -452,6 +488,7 @@ class VisionConfig(_Section):
     # Extra title patterns on top of the built-in credential list in
     # vision/privacy.py. Additive: the built-ins cannot be configured away.
     extra_deny_titles: list[str] = Field(default_factory=list)
+    vlm: VLMConfig = Field(default_factory=VLMConfig)
     ocr_backend: str = Field(default="rapidocr", pattern="^(rapidocr|null)$")
     # Below this a recognised line is reported as uncertain rather than as text.
     ocr_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
