@@ -39,6 +39,7 @@ from aura.api.schemas import (
     ProviderStatus,
     ResourceStatus,
     SessionOut,
+    SpeechRequest,
     StatusResponse,
     ToolCallRequest,
     ToolCallResponse,
@@ -97,6 +98,9 @@ class AppState:
     presence: Any = None
     watcher: Any = None
     estop: Any = None
+    # Phase 10B extension. Spawns `python -m aura.voice.synth` per utterance,
+    # so it holds no model and Core stays torch-free and 69 MB.
+    speech: Any = None
 
 
 def get_state(request: Request) -> AppState:
@@ -218,6 +222,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await bus.aclose(drain_timeout=1.0)
             if tools is not None:
                 tools.close()
+            live: AppState = app.state.aura
+            if live.speech is not None:
+                live.speech.close()
             await provider.close()
             store.close()
             log.info("aura.stopped")
@@ -400,6 +407,50 @@ def _install_routes(app: FastAPI) -> None:
         if not page.is_file():  # pragma: no cover - packaging failure
             raise AuraError("The console is missing from this installation.")
         return FileResponse(page, media_type="text/html")
+
+    @app.post("/v1/speech", tags=["voice"])
+    async def speak(body: SpeechRequest, state: AppState = Depends(get_state)) -> Any:
+        """Turn text into audio, for clients that have no voice of their own.
+
+        The console uses this so a typed conversation can still be heard.
+
+        Core does not synthesise: it spawns `python -m aura.voice.synth`, which
+        loads a voice, writes a WAV to stdout and exits. An in-process version
+        was built first and measured -- 69 MB became 115 MB permanently -- and
+        `test_voice_seam.py` forbids the import that made it possible. See the
+        module docstring.
+        """
+        import anyio
+        from fastapi.responses import Response
+
+        from aura.api.speech_route import SpeechService
+
+        if state.speech is None:
+            state.speech = SpeechService(state.settings)
+
+        # Synthesis is blocking and CPU-bound; off the event loop it goes, or
+        # the SSE stream and every other request stall behind it.
+        wav, seconds = await anyio.to_thread.run_sync(
+            state.speech.synthesize_wav, body.text
+        )
+        await state.audit.record(
+            actor="user",
+            action="speech.synthesize",
+            target=f"{len(body.text)} chars",
+            detail={"audio_s": round(seconds, 2)},
+        )
+        return Response(
+            content=wav,
+            media_type="audio/wav",
+            headers={"X-Audio-Seconds": f"{seconds:.2f}", "Cache-Control": "no-store"},
+        )
+
+    @app.get("/v1/speech", tags=["voice"])
+    async def speech_state(state: AppState = Depends(get_state)) -> dict[str, Any]:
+        """Whether speech is available. It is never resident; see the module."""
+        from aura.api.speech_route import speech_status
+
+        return speech_status(state.speech)
 
     @app.get("/v1/config", tags=["status"])
     async def config(state: AppState = Depends(get_state)) -> dict[str, Any]:

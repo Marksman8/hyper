@@ -150,6 +150,38 @@ def test_anything_toggled_with_hidden_survives_the_cascade() -> None:
             )
 
 
+def test_only_the_named_areas_place_panels() -> None:
+    """The second cascade bug, and the same shape as the first.
+
+    `.span2{grid-row:span 2}` sat further down the sheet than
+    `.a-core{grid-area:core}`. Being later, it overwrote the row half of
+    `grid-area`, half-placing the core panel and dropping everything else into
+    auto-placement -- a large hole in the bottom-left, on a page whose tests all
+    passed.
+
+    So: only the `.a-*` area rules may set `grid-row` or `grid-column`. Anything
+    else placing a panel is fighting them, and the later one silently wins.
+    """
+    css = HUD.read_text(encoding="utf-8").split("</style>")[0]
+    # Comments first: this file explains the bug by quoting the rule that
+    # caused it, and a scanner that reads comments would flag the warning.
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+    offenders = []
+    for rule in re.finditer(r"(\.[\w-]+(?:\s*,\s*\.[\w-]+)*)\s*\{([^}]*)\}", css):
+        selector, body = rule.group(1), rule.group(2)
+        if not re.search(r"grid-(row|column)\s*:", body):
+            continue
+        if all(part.strip().startswith(".a-") for part in selector.split(",")):
+            continue
+        offenders.append(selector.strip())
+
+    assert not offenders, (
+        "these set grid-row/grid-column outside the named-area rules and will "
+        f"fight them depending on sheet order: {offenders}"
+    )
+
+
 def test_the_console_javascript_parses() -> None:
     """The one failure no other test here can see.
 

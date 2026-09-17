@@ -76,14 +76,33 @@
   button.go:hover{background:#122A20;border-color:var(--ok)}
 
   /* -- grid -------------------------------------------------------------- */
+  /* Six panels. The first version left the event stream orphaned in an
+     implicit third row taking one column, with dead space beside it, because
+     three columns times two rows minus a two-row span leaves five slots. Named
+     areas instead, so the shape is stated rather than inferred -- and the
+     stream gets the full width, which is the right shape for a log anyway. */
   main{
     display:grid;gap:1px;background:var(--rule);overflow:hidden;
-    grid-template-columns:minmax(0,1fr) minmax(0,1.25fr) minmax(0,1fr);
-    grid-template-rows:minmax(0,1fr) minmax(0,1fr);
+    grid-template-columns:minmax(0,1fr) minmax(0,1.45fr) minmax(0,1fr);
+    grid-template-rows:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);
+    grid-template-areas:
+      "sys    chat   core"
+      "tools  chat   appr"
+      "audit  ev     ev";
   }
+  /* Placement lives here and nowhere else. A `.span2{grid-row:span 2}` rule
+     used to sit further down the sheet; because it came later it overwrote the
+     row half of `grid-area`, half-placing the core panel and dropping every
+     other panel into auto-placement -- which showed up as a large hole in the
+     bottom-left. Named areas are the only thing that may set grid-row or
+     grid-column on a panel. */
+  .a-sys{grid-area:sys} .a-tools{grid-area:tools} .a-core{grid-area:core}
+  .a-appr{grid-area:appr} .a-audit{grid-area:audit} .a-ev{grid-area:ev}
+  .a-chat{grid-area:chat}
   @media (max-width:1100px){
     main{grid-template-columns:minmax(0,1fr);grid-auto-rows:minmax(240px,auto);
-         grid-template-rows:none;overflow:auto}
+         grid-template-rows:none;grid-template-areas:none;overflow:auto}
+    .a-sys,.a-tools,.a-core,.a-appr,.a-audit,.a-ev,.a-chat{grid-area:auto}
     .app{height:auto;min-height:100vh}
   }
   .panel{background:var(--panel);display:flex;flex-direction:column;min-height:0;min-width:0}
@@ -94,7 +113,6 @@
   }
   .panel > h2 .src{margin-left:auto;color:var(--faint);font-size:9.5px;letter-spacing:.04em}
   .body{padding:12px 14px;overflow:auto;flex:1;min-height:0}
-  .span2{grid-row:span 2}
 
   /* -- primitives -------------------------------------------------------- */
   .kv{display:grid;grid-template-columns:auto 1fr;gap:3px 14px;align-items:baseline}
@@ -108,17 +126,22 @@
   .empty{color:var(--faint);font-size:11.5px;padding:6px 0}
 
   /* -- core diagram ------------------------------------------------------ */
-  .core{display:flex;flex-direction:column;align-items:center;gap:0;padding:6px 0 2px}
+  /* The core panel is the tallest thing on the page, so the diagram centres in
+     whatever space is left and the readouts pin to the bottom. Otherwise the
+     ring sits near the top with a large empty region below it. */
+  .a-core .body{display:flex;flex-direction:column}
+  .core{display:flex;flex-direction:column;align-items:center;gap:0;
+        flex:1;justify-content:center;padding:6px 0 14px}
   .core .ring{
-    width:74px;height:74px;border-radius:50%;display:grid;place-items:center;
-    border:1px solid var(--rule);color:var(--faint);font-size:22px;
+    width:92px;height:92px;border-radius:50%;display:grid;place-items:center;
+    border:1px solid var(--rule);color:var(--faint);font-size:26px;
   }
   .core .ring.live{border-color:var(--accent);color:var(--accent)}
   .core .ring.bad{border-color:var(--bad);color:var(--bad)}
   .core .state{font-size:11px;letter-spacing:.14em;color:var(--dim);margin-top:7px;
                text-transform:uppercase;min-height:16px}
   .spokes{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;width:100%;
-          margin-top:12px;background:var(--rule);border-top:1px solid var(--rule);
+          background:var(--rule);border-top:1px solid var(--rule);
           border-bottom:1px solid var(--rule)}
   .spoke{background:var(--panel);padding:8px 6px;text-align:center}
   .spoke .lbl{font-size:9.5px;letter-spacing:.12em;color:var(--faint)}
@@ -153,6 +176,31 @@
   .appr .tool{color:var(--warn);font-size:12px}
   .appr .sum{color:var(--ink);font-size:11.5px;margin:5px 0 9px;word-break:break-word}
   .appr .acts{display:flex;gap:7px}
+
+  /* -- conversation ----------------------------------------------------- */
+  .a-chat .body{display:flex;flex-direction:column;gap:0;padding:0}
+  .msgs{flex:1;overflow:auto;padding:12px 14px;display:flex;
+        flex-direction:column;gap:10px;min-height:0}
+  .turn{max-width:92%}
+  .turn .who{font-size:9.5px;letter-spacing:.12em;color:var(--faint);margin-bottom:2px}
+  .turn .txt{white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.55}
+  .turn.you{align-self:flex-end;text-align:right}
+  .turn.you .txt{color:var(--accent)}
+  .turn.aura .txt{color:var(--ink)}
+  .turn.sys .txt{color:var(--dim);font-size:11.5px}
+  .turn .meta{font-size:10px;color:var(--faint);margin-top:3px}
+  .ask{border:1px solid var(--warn);background:#1C1810;padding:9px 11px;border-radius:2px}
+  .ask .t{color:var(--warn);font-size:11.5px;margin-bottom:7px}
+  .ask .acts{display:flex;gap:7px}
+  .composer{display:flex;gap:8px;align-items:center;padding:10px 12px;
+            border-top:1px solid var(--rule);background:var(--panel-2);flex:0 0 auto}
+  .composer input[type=text]{flex:1;min-width:0;font-family:var(--mono);font-size:12.5px;
+        padding:7px 10px;background:var(--bg);border:1px solid var(--rule);
+        color:var(--ink);border-radius:2px}
+  .composer input[type=text]:focus{outline:none;border-color:var(--accent)}
+  .composer label{display:flex;align-items:center;gap:5px;font-size:10.5px;
+                  color:var(--dim);white-space:nowrap;cursor:pointer}
+  .composer input[type=checkbox]{accent-color:var(--accent);cursor:pointer}
 
   /* -- token gate -------------------------------------------------------- */
   .gate{position:fixed;inset:0;background:rgba(10,16,18,.97);display:grid;
@@ -205,20 +253,42 @@
 
   <main>
     <!-- ---------------- column 1 ---------------- -->
-    <section class="panel" data-source="api:/v1/status">
+    <section class="panel a-sys" data-source="api:/v1/status">
       <h2>SYSTEM <span class="src">/v1/status</span></h2>
       <div class="body">
         <dl class="kv" id="p-system"><dd class="unlit">waiting for the API…</dd></dl>
       </div>
     </section>
 
-    <section class="panel" data-source="api:/v1/tools">
+    <section class="panel a-tools" data-source="api:/v1/tools">
       <h2>TOOLS &amp; POLICY <span class="src">/v1/tools</span></h2>
       <div class="body" id="p-tools"><p class="empty">waiting…</p></div>
     </section>
 
-    <!-- ---------------- column 2 ---------------- -->
-    <section class="panel span2" data-source="event:presence_state">
+    <!-- ---------------- centre ---------------- -->
+    <section class="panel a-chat" data-source="api:/v1/agent">
+      <h2>CONVERSATION <span class="src">/v1/chat · /v1/agent</span></h2>
+      <div class="body">
+        <div class="msgs" id="p-msgs">
+          <div class="turn sys"><div class="txt">Type to AURA here. Voice runs as its own
+            client (<code>aura voice</code>) and reports into the same panels.</div></div>
+        </div>
+        <form class="composer" id="composer">
+          <input type="text" id="say" autocomplete="off" placeholder="say something…"
+                 aria-label="message to AURA">
+          <label title="Off: plain conversation. On: AURA may propose tool calls, still under the permission gate.">
+            <input type="checkbox" id="use-tools"> tools
+          </label>
+          <label title="Speak replies aloud in AURA's own voice. Loads the voice on first use and unloads it when idle.">
+            <input type="checkbox" id="use-voice"> voice
+          </label>
+          <button type="submit" id="send">SEND</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- ---------------- right ---------------- -->
+    <section class="panel a-core" data-source="event:presence_state">
       <h2>AURA CORE <span class="src">/v1/events</span></h2>
       <div class="body">
         <div class="core">
@@ -240,18 +310,18 @@
     </section>
 
     <!-- ---------------- column 3 ---------------- -->
-    <section class="panel" data-source="event:permission_required">
+    <section class="panel a-appr" data-source="event:permission_required">
       <h2>APPROVALS <span class="src">/v1/approvals</span></h2>
       <div class="body" id="p-approvals"><p class="empty">nothing waiting on you</p></div>
     </section>
 
-    <section class="panel" data-source="api:/v1/audit">
+    <section class="panel a-audit" data-source="api:/v1/audit">
       <h2>SECURITY / AUDIT <span class="src">/v1/audit</span></h2>
       <div class="body" id="p-audit"><p class="empty">waiting…</p></div>
     </section>
 
     <!-- ---------------- row 2 ---------------- -->
-    <section class="panel" data-source="api:/v1/events">
+    <section class="panel a-ev" data-source="api:/v1/events">
       <h2>EVENT STREAM <span class="src">/v1/events</span></h2>
       <div class="body" id="p-events"><p class="empty">not connected</p></div>
     </section>
@@ -504,6 +574,173 @@ $("btn-estop").addEventListener("click", async () => {
   pollStatus();
 });
 
+// -- conversation -----------------------------------------------------------
+//
+// Two routes, chosen by the `tools` checkbox, and the choice is the point.
+// Unchecked goes to /v1/chat and AURA cannot act at all. Checked goes to
+// /v1/agent, where she may *propose* tool calls -- which still pass the
+// permission gate, and anything above the autonomous ceiling comes back as a
+// refusal carrying an approval token rather than as an action.
+//
+// Default is off. Capability is opt-in, which is the same rule the rest of the
+// system runs on.
+
+let chatSession = null;
+let busy = false;
+
+function turn(who, text, meta) {
+  const box = $("p-msgs");
+  const el = document.createElement("div");
+  el.className = "turn " + who;
+  const label = who === "you" ? "YOU" : who === "aura" ? "AURA" : "";
+  el.innerHTML =
+    (label ? `<div class="who">${label}</div>` : "") +
+    `<div class="txt">${esc(text)}</div>` +
+    (meta ? `<div class="meta">${esc(meta)}</div>` : "");
+  box.append(el);
+  box.scrollTop = box.scrollHeight;
+  return el;
+}
+
+function setBusy(on) {
+  busy = on;
+  $("send").disabled = on;
+  $("send").textContent = on ? "…" : "SEND";
+  $("say").disabled = on;
+}
+
+$("composer").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = $("say").value.trim();
+  if (!text || busy) return;
+  $("say").value = "";
+  turn("you", text);
+  await send(text, []);
+});
+
+async function send(text, approve) {
+  setBusy(true);
+  const withTools = $("use-tools").checked;
+  const thinking = turn("sys", withTools ? "thinking, tools available…" : "thinking…");
+
+  try {
+    const body = withTools
+      ? { message: text, session_id: chatSession, approve }
+      : { message: text, session_id: chatSession };
+    const r = await api(withTools ? "/v1/agent" : "/v1/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    thinking.remove();
+
+    if (r.status === 401 || r.status === 403) { stop(); showGate("The token stopped working."); return; }
+    if (!r.ok) {
+      let detail = "";
+      try { detail = (await r.json()).error.message; } catch (err) { detail = "HTTP " + r.status; }
+      turn("sys", "refused: " + detail);
+      return;
+    }
+
+    const d = await r.json();
+    chatSession = d.session_id || chatSession;
+
+    const bits = [];
+    if (d.tool_calls_made) bits.push(d.tool_calls_made + " tool call" + (d.tool_calls_made > 1 ? "s" : ""));
+    if (d.latency_ms) bits.push(d.latency_ms + " ms");
+    if (d.stopped_early) bits.push("stopped early: " + (d.stop_reason || "?"));
+    if (d.content) {
+      turn("aura", d.content, bits.join("  ·  "));
+      if ($("use-voice").checked) speak(d.content);
+    }
+
+    const pending = d.pending_confirmations || [];
+    if (pending.length) askApproval(text, pending);
+
+    loadAudit();
+  } catch (err) {
+    thinking.remove();
+    turn("sys", "could not reach AURA: " + err.message);
+  } finally {
+    setBusy(false);
+    $("say").focus();
+  }
+}
+
+function askApproval(originalText, tokens) {
+  // The tokens are argument-bound (`name:fingerprint`). Approving re-sends the
+  // same message carrying them, so the grant applies to the exact call AURA
+  // asked for and to nothing else -- a different path produces a different
+  // fingerprint and asks again.
+  const box = $("p-msgs");
+  const card = document.createElement("div");
+  card.className = "turn sys";
+  card.innerHTML =
+    `<div class="ask"><div class="t">AURA needs approval for
+       ${esc(tokens.map(tool_name).join(", "))}</div>
+     <div class="acts">
+       <button class="go" data-ok="1">APPROVE</button>
+       <button class="danger" data-no="1">DENY</button>
+     </div></div>`;
+  box.append(card);
+  box.scrollTop = box.scrollHeight;
+
+  card.addEventListener("click", async (e) => {
+    if (e.target.getAttribute("data-ok")) {
+      card.remove();
+      turn("sys", "approved " + tokens.map(tool_name).join(", "));
+      await send(originalText, tokens);
+    } else if (e.target.getAttribute("data-no")) {
+      card.remove();
+      turn("sys", "denied");
+    }
+  });
+}
+
+function tool_name(token) { return String(token).split(":")[0]; }
+
+// -- speaking ---------------------------------------------------------------
+//
+// Typed in, spoken out. `/v1/speech` returns a WAV in AURA's own Piper voice
+// rather than the browser's `speechSynthesis`, which would be whatever the OS
+// happens to ship and would make her sound like a different person depending
+// on which machine the console is open on.
+//
+// Off by default, and that is a resource decision as much as a preference: the
+// voice is built on the first request and unloaded when idle, so a console
+// with this unchecked costs Core nothing at all.
+
+let playing = null;
+
+async function speak(text) {
+  if (!text || !text.trim()) return;
+  try {
+    const r = await api("/v1/speech", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok) {
+      let why = "HTTP " + r.status;
+      try { why = (await r.json()).error.message; } catch (e) { /* keep the status */ }
+      turn("sys", "could not speak: " + why);
+      return;
+    }
+    const blob = await r.blob();
+    if (playing) { playing.pause(); URL.revokeObjectURL(playing.src); }
+    playing = new Audio(URL.createObjectURL(blob));
+    playing.addEventListener("ended", () => { URL.revokeObjectURL(playing.src); });
+    // Browsers block audio until the page has been interacted with. Sending a
+    // message is an interaction, so by the time this runs it is allowed --
+    // except on the very first load if something else triggered it.
+    await playing.play().catch((err) => {
+      turn("sys", "the browser blocked playback: " + err.message);
+    });
+  } catch (err) {
+    turn("sys", "could not reach the voice: " + err.message);
+  }
+}
+
 // -- the event stream -------------------------------------------------------
 // fetch + a stream reader, not EventSource: EventSource cannot set an
 // Authorization header, and a token in the query string ends up in every
@@ -717,6 +954,7 @@ function logEvent(type, detail) {
 // -- boot -------------------------------------------------------------------
 
 function start() {
+  $("say").focus();
   pollStatus();
   loadTools();
   loadAudit();

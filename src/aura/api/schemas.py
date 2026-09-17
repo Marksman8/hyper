@@ -13,6 +13,17 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class SpeechRequest(BaseModel):
+    """Text to speak aloud.
+
+    Capped well below what the synthesiser could chew through: a spoken reply
+    is a sentence or two, and a client asking for a novel is either confused or
+    trying to make Core spend minutes in a worker thread.
+    """
+
+    text: str = Field(min_length=1, max_length=4000)
+
+
 class ChatRequest(BaseModel):
     """AURA-native chat request."""
 
