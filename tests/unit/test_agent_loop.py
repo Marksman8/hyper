@@ -279,6 +279,51 @@ async def test_pending_confirmations_carry_the_binding_not_just_a_name() -> None
     assert tool_name(outcome.pending_confirmations[0]) == "write_file"
 
 
+async def test_a_refusal_does_not_cancel_the_rest_of_the_request() -> None:
+    """Reported from a real session.
+
+    "open antigravity ide and code display first n natural numbers in python"
+    asked for two things. The launch needed approval and was refused; the code
+    needed no tool at all. AURA explained the refusal and dropped the code half
+    without mentioning it.
+
+    The observation used to end "explain to the user what you would like to do
+    and why", and a 4B does exactly that -- it explains, and stops. One refused
+    action is one refused action, not the end of the turn, and a refusal that
+    quietly cancels the rest of a request is worse than the refusal: the user
+    cannot see what was dropped.
+    """
+    provider = ScriptedProvider(
+        [wants("open_application", app="Antigravity"), answer("opened, and here is the code")]
+    )
+    runner = FakeRunner({"open_application": (False, "needs confirmation", "confirm")})
+    await AgentLoop(provider, runner).run(start())
+
+    observations = [
+        m.content
+        for call in provider.calls
+        for m in call
+        if m.role is Role.TOOL
+    ]
+    assert observations, "the refusal never reached the model"
+    text = observations[-1].lower()
+    assert "carry on" in text, "the model is not told to continue with the rest"
+    assert "explain to the user what you would like to do" not in text
+
+
+async def test_a_denial_also_leaves_the_rest_of_the_turn_alive() -> None:
+    """Same rule for DENY. `run_python` is LEVEL 4 and denied outright after
+    audit 01 finding 3, so this is now the common case rather than a rare one."""
+    provider = ScriptedProvider([wants("run_python", code="print(1)"), answer("done")])
+    runner = FakeRunner({"run_python": (False, "denied by policy", "deny")})
+    await AgentLoop(provider, runner).run(start())
+
+    observations = [
+        m.content for call in provider.calls for m in call if m.role is Role.TOOL
+    ]
+    assert "carry on with every" in observations[-1].lower()
+
+
 async def test_a_refusal_tells_the_model_not_to_retry() -> None:
     """Otherwise the model burns the whole budget on the same rejected call."""
     provider = ScriptedProvider([wants("write_file", path="x"), answer("ok")])

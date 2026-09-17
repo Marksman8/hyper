@@ -298,18 +298,34 @@ class AgentLoop:
         # Refusals and errors are both fed back as text. The model gets to see
         # exactly why, which is what lets it try a different path instead of
         # repeating the same call.
+        #
+        # **Both of these tell it to carry on.** They used to end with "explain
+        # to the user what you would like to do and why", and a 4B does exactly
+        # that: it explains, and abandons everything else it was asked. Reported
+        # from a real session -- "open antigravity ide and code display first n
+        # natural numbers in python" asked for the launch, got the confirmation
+        # refusal, and dropped the code half without a word. The code needed no
+        # tool at all; writing it is just text.
+        #
+        # One refused action is one refused action. It is not the end of the
+        # turn, and a refusal that quietly cancels the rest of a request is a
+        # worse failure than the refusal itself -- the user cannot see what was
+        # dropped.
         if decision == "confirm":
             return (
                 f"REFUSED: {body} This action needs the user's approval, which "
-                "has not been given for this task. Do not retry it — explain to "
-                "the user what you would like to do and why.",
+                "has not been given yet. Do not retry this call. Carry on with "
+                "every other part of the request that does not need it -- "
+                "including anything you can simply answer or write out -- and "
+                "at the end say what you are still waiting on approval for.",
                 False,
                 decision,
             )
         if decision == "deny":
             return (
-                f"DENIED: {body} Do not retry this call; find another approach "
-                "or tell the user it is not possible.",
+                f"DENIED: {body} Do not retry this call. Carry on with every "
+                "other part of the request, then tell the user which part was "
+                "not possible and why.",
                 False,
                 decision,
             )
