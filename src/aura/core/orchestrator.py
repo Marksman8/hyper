@@ -419,7 +419,13 @@ class Orchestrator:
 
         try:
             outcome: AgentOutcome = await loop.run(
-                messages, tool_params, should_stop=lambda: self._estop
+                # `emergency_stop`, not `_estop` -- which never existed. Audit
+                # 01 finding 6: this lambda raised AttributeError on the loop's
+                # first iteration, so every tool-using turn died at step 0 and
+                # the per-step stop check never once evaluated the stop.
+                messages,
+                tool_params,
+                should_stop=lambda: self.emergency_stop,
             )
         except Exception as exc:
             self._events.task_failed("agent", exc, session_id=session.id)

@@ -184,3 +184,86 @@ async def test_a_failing_provider_still_records_the_user_turn(
 
     audit = await store.recent_audit()
     assert any(r["decision"] == "error" for r in audit)
+
+
+# -- security audit 01, finding 6 -------------------------------------------
+
+
+class _ToolAwareProvider(RecordingProvider):
+    """A provider the agent loop can actually call.
+
+    `RecordingProvider.chat` takes no `tools` kwarg, which the loop always
+    passes. Kept separate rather than widening the original: the prompt-assembly
+    tests above assert on a signature that has no reason to change.
+    """
+
+    async def chat(  # type: ignore[override]
+        self,
+        messages: Sequence[Message],
+        params: GenerationParams | None = None,
+        tools: list[dict[str, object]] | None = None,
+    ) -> ChatResult:
+        self.calls.append(list(messages))
+        return ChatResult(content="ok", model="recording-v1", provider=self.name)
+
+
+class _StubRunner:
+    """The minimum `AgentLoop` needs. No filesystem, no executor."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def run(
+        self, name: str, arguments: dict[str, object], *, confirmed: bool
+    ) -> tuple[bool, str, str]:
+        self.calls.append(name)
+        return True, "stub", "allow"
+
+    def wire_specs(self) -> list[dict[str, object]]:
+        return []
+
+    def needs_confirmation(self, name: str) -> bool:
+        return False
+
+
+async def test_act_reaches_the_model_at_all(settings: Settings, store: MemoryStore) -> None:
+    """Audit 01 finding 6. `act()` raised AttributeError before any model call.
+
+    `should_stop=lambda: self._estop` named an attribute that has never existed
+    -- the orchestrator has `_estop_switch` and an `emergency_stop` property.
+    The lambda is evaluated on the loop's first iteration, so every tool-using
+    turn died at step 0, since Phase 4.
+
+    It went unnoticed because the only orchestrator fixture builds without
+    tools, and `act()` falls back to `chat()` when `self._tools is None`. The
+    fallback is correct; it also meant no test ever entered the branch.
+
+    Failing closed is the one mercy here: a broken stop check that crashes is
+    far better than one that silently returns False. This asserts the branch is
+    entered at all, which is what nothing did before.
+    """
+    orch = Orchestrator(
+        settings, _ToolAwareProvider(), store, AuditLog(store), tools=_StubRunner()
+    )
+    result = await orch.act("do something with tools")
+    assert result.content
+
+
+async def test_the_agent_loop_checks_the_stop_on_every_iteration(
+    settings: Settings, store: MemoryStore
+) -> None:
+    """The check finding 6 disabled, now doing its job.
+
+    Engaged mid-flight rather than before entry: entry is already guarded by
+    `_open_turn`, and the property under test is that a loop which can run for
+    minutes is stoppable *during* those minutes.
+    """
+    orch = Orchestrator(
+        settings, _ToolAwareProvider(), store, AuditLog(store), tools=_StubRunner()
+    )
+    orch.estop.engage("test")
+    try:
+        with pytest.raises(EmergencyStopError):
+            await orch.act("this must not run")
+    finally:
+        orch.estop.release("test")
