@@ -113,6 +113,43 @@ async def test_the_shell_is_served_without_a_token(settings: Settings) -> None:
                 assert (await anon.get(path)).status_code in (401, 403), path
 
 
+def test_anything_toggled_with_hidden_survives_the_cascade() -> None:
+    """The bug that shipped: a dialog that would not close.
+
+    `[hidden]` gets its `display:none` from the browser's default stylesheet.
+    A class rule that sets `display` is an author rule, so it wins, and
+    `el.hidden = true` silently does nothing -- the console loaded perfectly
+    behind an overlay that stayed put.
+
+    No other test here could see it. The markup was right, the script was
+    right, and the two were correct separately. So: every class that both sets
+    `display` and is toggled via `.hidden` in the script must also carry a
+    `[hidden]` rule turning it off.
+    """
+    html = HUD.read_text(encoding="utf-8")
+    css = html.split("</style>")[0]
+    script = html.split("<script>")[1] if "<script>" in html else ""
+
+    toggled = set(re.findall(r'\$\("([\w-]+)"\)\.hidden\s*=', script))
+    assert toggled, "nothing is toggled with .hidden; update this test if that changed"
+
+    for element_id in sorted(toggled):
+        block = re.search(
+            rf'id="{re.escape(element_id)}"[^>]*class="([^"]+)"', html
+        ) or re.search(rf'class="([^"]+)"[^>]*id="{re.escape(element_id)}"', html)
+        if block is None:
+            continue  # no class, so no author rule can be fighting [hidden]
+        for cls in block.group(1).split():
+            sets_display = re.search(rf"\.{re.escape(cls)}\s*\{{[^}}]*display\s*:", css)
+            if not sets_display:
+                continue
+            guard = re.search(rf"\.{re.escape(cls)}\[hidden\]\s*\{{[^}}]*display\s*:\s*none", css)
+            assert guard, (
+                f'.{cls} sets display and #{element_id} is toggled with .hidden, '
+                f"so it needs a `.{cls}[hidden]{{display:none}}` rule or it will never hide"
+            )
+
+
 def test_the_console_javascript_parses() -> None:
     """The one failure no other test here can see.
 

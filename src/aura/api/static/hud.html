@@ -54,6 +54,11 @@
   .brand{font-size:15px;font-weight:600;letter-spacing:.22em;color:var(--accent)}
   .hgap{flex:1}
   .hstat{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim)}
+  /* See the note by `.gate[hidden]`. #estop-wrap carries this class and is
+     toggled with `hidden`, so without this the "EMERGENCY STOP ENGAGED"
+     banner showed permanently -- a security indicator that lies, which is
+     worse than one that is missing. */
+  .hstat[hidden]{display:none}
   .hstat b{color:var(--ink);font-weight:500}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:0 0 auto}
   .dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}
@@ -152,6 +157,12 @@
   /* -- token gate -------------------------------------------------------- */
   .gate{position:fixed;inset:0;background:rgba(10,16,18,.97);display:grid;
         place-items:center;padding:20px;z-index:10}
+  /* `display:grid` above is an author rule and `[hidden]` gets its
+     display:none from the browser's default stylesheet, so author wins and
+     `el.hidden = true` silently does nothing. The console loaded correctly
+     behind a dialog that would not go away. Any class that sets `display` and
+     is also toggled with `hidden` needs this line. */
+  .gate[hidden]{display:none}
   .gate form{background:var(--panel);border:1px solid var(--rule);padding:22px;
              max-width:440px;width:100%;border-radius:3px}
   .gate h1{margin:0 0 6px;font-size:14px;letter-spacing:.2em;color:var(--accent)}
@@ -162,6 +173,7 @@
               border-radius:2px;margin-bottom:10px}
   .gate input:focus{outline:none;border-color:var(--accent)}
   .gate .err{color:var(--bad);font-size:11.5px;min-height:17px;margin:0 0 8px}
+  .gate .err.working{color:var(--dim)}
 </style>
 </head>
 <body>
@@ -269,17 +281,20 @@ $("gate-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const candidate = $("token-input").value.trim();
   if (!candidate) return;
+  $("gate-err").classList.add("working");
   $("gate-err").textContent = "checking…";
   try {
     const r = await fetch("/v1/status", { headers: { Authorization: "Bearer " + candidate } });
-    if (r.status === 401 || r.status === 403) { $("gate-err").textContent = "That token was refused."; return; }
-    if (!r.ok) { $("gate-err").textContent = "API error " + r.status + "."; return; }
+    if (r.status === 401 || r.status === 403) { $("gate-err").classList.remove("working"); $("gate-err").textContent = "That token was refused."; return; }
+    if (!r.ok) { $("gate-err").classList.remove("working"); $("gate-err").textContent = "API error " + r.status + "."; return; }
   } catch (err) {
-    $("gate-err").textContent = "Could not reach AURA. Is Core running?";
+    $("gate-err").classList.remove("working"); $("gate-err").textContent = "Could not reach AURA. Is Core running?";
     return;
   }
   token = candidate;
   try { localStorage.setItem(KEY, token); } catch (e) { /* private window; session only */ }
+  $("gate-err").textContent = "";
+  $("gate-err").classList.remove("working");
   $("gate").hidden = true;
   start();
 });
