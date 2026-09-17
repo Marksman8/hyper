@@ -17,7 +17,7 @@ import pytest
 from aura.config import Settings, ToolsConfig
 from aura.memory.store import MemoryStore
 from aura.security.audit import AuditLog
-from aura.security.permissions import PermissionLevel, PermissionPolicy
+from aura.security.permissions import Decision, PermissionLevel, PermissionPolicy
 from aura.tools.base import Tool
 from aura.tools.executor import ToolExecutor
 from aura.tools.factory import build_context, build_registry
@@ -304,3 +304,47 @@ def test_specs_render_to_the_model_wire_format(settings: Settings) -> None:
     assert wire["type"] == "function"
     assert wire["function"]["name"] == "read_file"
     assert "path" in wire["function"]["parameters"]["properties"]
+
+
+# -- security audit 01, finding 3 -------------------------------------------
+
+
+def test_run_python_is_denied_by_the_default_policy(settings: Settings) -> None:
+    """`run_python` escapes the workspace guard, so policy must not allow it.
+
+    Audit 01 finding 3. The tool runs a subprocess as the user, which means the
+    deny patterns in `tools/workspace.py` do not apply to it -- including the
+    one protecting `var/secrets/emergency_stop`. `estop.py` claims the switch is
+    unreachable because every *file tool* is denied that path; this tool is not
+    a file tool and needs four words to delete it.
+
+    Until it is genuinely bounded, the honest position is that the default
+    policy refuses it and a human raises the ceiling deliberately.
+    """
+    registry: ToolRegistry = build_registry(settings)
+    spec = registry.get("run_python").spec
+    assert spec.level is PermissionLevel.CRITICAL
+    assert PermissionPolicy().evaluate(spec.level) is Decision.DENY
+
+
+async def test_run_python_cannot_be_confirmed_into_running(settings: Settings) -> None:
+    """A denial is not a confirmation prompt. `confirmed=True` must not help.
+
+    The distinction matters: finding 2 showed that a confirmation, once given,
+    spends more widely than the human intended. A DENY has no such path -- there
+    is nothing to grant -- and this asserts that the executor treats it that way
+    rather than falling through to the confirm branch.
+    """
+    registry = build_registry(settings)
+    ex = ToolExecutor(registry, PermissionPolicy())
+    try:
+        result = await ex.execute(
+            ToolCall(name="run_python", arguments={"code": "print(1)"}, confirmed=True),
+            build_context(settings),
+        )
+    finally:
+        ex.close()
+
+    assert not result.ok
+    assert result.decision == "deny"
+    assert "denied by policy" in (result.error or "")

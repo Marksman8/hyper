@@ -51,6 +51,37 @@ def tool_settings(tmp_path: Path, workspace: Path) -> Settings:
     )
 
 
+@pytest.fixture
+def unbounded_settings(tmp_path: Path, workspace: Path) -> Settings:
+    """Settings where a human has deliberately raised the ceiling to LEVEL 4.
+
+    `run_python` is LEVEL 4 after audit 01 finding 3, and `max_confirmable_level`
+    defaults to 3 -- so on default settings it cannot be reached at all, which is
+    the point. The tool still has to work when someone opts in, and that is what
+    these settings exist to exercise. They are not the shipped configuration.
+    """
+    return Settings(
+        api=ApiConfig(host="127.0.0.1", port=8760),
+        llm=LLMConfig(provider="echo"),
+        memory=MemoryConfig(db_path=str(tmp_path / "unbounded.db")),
+        security=SecurityConfig(api_token=TEST_TOKEN, token_file=str(tmp_path / "token2")),
+        logging=LoggingConfig(level="WARNING", file=str(tmp_path / "aura.log")),
+        tools=ToolsConfig(workspace_roots=[str(workspace)], max_confirmable_level=4),
+    )
+
+
+@pytest_asyncio.fixture
+async def unbounded_client(unbounded_settings: Settings) -> AsyncIterator[AsyncClient]:
+    app = create_app(unbounded_settings)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://aura.test",
+            headers={"Authorization": "Bearer " + TEST_TOKEN},
+        ) as c:
+            yield c
+
+
 @pytest_asyncio.fixture
 async def tool_client(tool_settings: Settings) -> AsyncIterator[AsyncClient]:
     app = create_app(tool_settings)
@@ -76,7 +107,11 @@ async def test_lists_tools_with_their_permission_levels(tool_client: AsyncClient
 
     assert by_name["write_file"]["level"] == 2
     assert by_name["write_file"]["needs_confirmation"] is True
-    assert by_name["run_python"]["needs_confirmation"] is True
+    # Audit 01 finding 3: LEVEL 4, above `max_confirmable_level` (3), so no
+    # confirmation can reach it. "needs_confirmation" would overstate what a
+    # human could do about it.
+    assert by_name["run_python"]["level"] == 4
+    assert by_name["run_python"]["needs_confirmation"] is False
 
 
 async def test_tool_endpoints_require_authentication(tool_settings: Settings) -> None:
@@ -200,8 +235,27 @@ async def test_confirmation_does_not_unlock_a_denied_path(
 # -- python -----------------------------------------------------------------
 
 
-async def test_python_runs_when_confirmed(tool_client: AsyncClient) -> None:
+async def test_python_is_refused_on_default_settings(tool_client: AsyncClient) -> None:
+    """Audit 01 finding 3. `confirmed` must not buy anything here.
+
+    The tool is outside the workspace guard, so it can delete
+    `var/secrets/emergency_stop` -- the kill switch `cdee879` exists to make
+    reliable. Until it is genuinely bounded, the shipped default refuses it.
+    """
     resp = await tool_client.post(
+        "/v1/tools/run_python",
+        json={"arguments": {"code": "print(6 * 7)"}, "confirmed": True},
+    )
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["decision"] == "deny"
+    assert "42" not in body.get("content", "")
+
+
+async def test_python_runs_when_the_ceiling_is_deliberately_raised(
+    unbounded_client: AsyncClient,
+) -> None:
+    resp = await unbounded_client.post(
         "/v1/tools/run_python",
         json={"arguments": {"code": "print(6 * 7)"}, "confirmed": True},
     )
@@ -211,10 +265,10 @@ async def test_python_runs_when_confirmed(tool_client: AsyncClient) -> None:
 
 
 async def test_python_reports_a_traceback_rather_than_swallowing_it(
-    tool_client: AsyncClient,
+    unbounded_client: AsyncClient,
 ) -> None:
     """A failing snippet is an observation the model must be able to act on."""
-    resp = await tool_client.post(
+    resp = await unbounded_client.post(
         "/v1/tools/run_python",
         json={"arguments": {"code": "raise ValueError('boom')"}, "confirmed": True},
     )

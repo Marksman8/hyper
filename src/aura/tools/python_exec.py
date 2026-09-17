@@ -13,9 +13,28 @@ directory is **isolation, not a sandbox**:
 - it can read anything the user can read, workspace or not
 
 Real sandboxing on Windows means a container, or a job object with a restricted
-token — its own project, and not this phase. Until then this tool sits at
-LEVEL 2 behind an explicit confirmation, and this docstring says what it does
-not protect against rather than implying safety it does not have.
+token — its own project, and not this phase.
+
+**Until then it sits at LEVEL 4, which the default policy denies outright.**
+
+It sat at LEVEL 2 behind a confirmation until security audit 01 finding 3, which
+observed what that combination actually permits. `estop.py` states as one of the
+three properties making the kill switch a switch that "AURA cannot reach it…
+`tools/workspace.py` already denies [`var/secrets/`] to every file tool". True,
+and this is not a file tool. It never calls `Workspace.resolve()` and does not
+need to: `Path("var/secrets/emergency_stop").unlink()` is four words and passes
+no guard. Nor does the deny list stop it reading `.env`, the API token, or
+`~/.ssh/` — the docstring above says as much and the deny list exists to prevent
+exactly those reads.
+
+Worse in combination with finding 2: a confirmation is granted per tool *name*
+and survives a task restart, so one approval of `run_python` for anything at all
+left arbitrary code execution available for the rest of that task.
+
+LEVEL 4 does not make the tool safe. It makes it unreachable without a human
+deliberately raising `tools.max_with_confirmation`, which is the honest standing
+for a capability the architecture cannot bound. The remedies that would earn a
+lower level are listed in `docs/SECURITY-AUDIT-01.md` §3.
 """
 
 from __future__ import annotations
@@ -52,8 +71,9 @@ class RunPythonTool(Tool):
             description=(
                 "Execute a Python snippet in a separate process and return its "
                 "stdout, stderr and exit code. Use print() to return values. "
-                "The process runs as the current user with network access, so "
-                "it requires explicit confirmation before it runs."
+                "The process runs as the current user with network access and "
+                "is not sandboxed, so it is denied unless a human has raised "
+                "the permission ceiling for it."
             ),
             parameters={
                 "type": "object",
@@ -73,7 +93,10 @@ class RunPythonTool(Tool):
                 "required": ["code"],
                 "additionalProperties": False,
             },
-            level=PermissionLevel.ACT,
+            # LEVEL 4, not 2. See the module docstring and audit 01 finding 3:
+            # this tool is outside the workspace guard, so it can reach the
+            # secrets directory and the kill switch inside it.
+            level=PermissionLevel.CRITICAL,
             # Generous, because the tool enforces its own inner timeout on the
             # subprocess; this is the outer backstop.
             timeout_s=130.0,
