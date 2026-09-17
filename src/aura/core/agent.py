@@ -28,6 +28,8 @@ recovers and one that stops at the first obstacle.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -46,6 +48,44 @@ from aura.logging import get_logger
 from aura.models.base import LLMProvider
 
 log = get_logger(__name__)
+
+
+# -- approval binding (audit 01, finding 2) ---------------------------------
+#
+# An approval names an *action*, not a tool. Finding 2: `confirmed` used to be
+# `invocation.name in self._approved`, so a grant for one call authorised every
+# later call to that tool -- and `desktop/app.py` re-runs the whole task after
+# an approval rather than resuming the approved call, so the second run's
+# arguments were never the ones a human read.
+#
+# A token is `name:fingerprint`. It stays a plain string so every layer that
+# carries approvals -- the API schema, the desktop client, `TaskResult` --
+# keeps its shape; only the contents got specific.
+
+_FINGERPRINT_CHARS = 16
+
+
+def approval_token(name: str, arguments: dict[str, Any]) -> str:
+    """The token that authorises exactly this call.
+
+    Arguments are canonicalised with sorted keys, so a model re-emitting the
+    same call with its keys in a different order produces the same token and
+    does not re-prompt. `default=str` because an argument only has to be
+    renderable here, not round-trippable: this is an identity, not a payload.
+    """
+    canonical = json.dumps(
+        [name, arguments], sort_keys=True, separators=(",", ":"), default=str
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"{name}:{digest[:_FINGERPRINT_CHARS]}"
+
+
+def tool_name(token: str) -> str:
+    """The tool a token refers to, for anything that shows it to a person.
+
+    A dialog should say "write_file", not "write_file:a3f9c2d1".
+    """
+    return token.split(":", 1)[0]
 
 
 class ToolRunner(Protocol):
@@ -97,8 +137,10 @@ class AgentOutcome:
     # answer produced after hitting the ceiling may be half a task.
     stopped_early: bool = False
     stop_reason: str = "complete"
-    # Tools the model wanted but could not use without a human. Surfaced so a
-    # UI can offer the approval rather than the user having to guess.
+    # Approval tokens for calls the model wanted but could not make without a
+    # human. Surfaced so a UI can offer the approval rather than the user
+    # having to guess -- and so what comes back is bound to the arguments that
+    # were shown. Render with `tool_name()`; pass back verbatim.
     pending_confirmations: list[str] = field(default_factory=list)
     latency_ms: int = 0
 
@@ -112,6 +154,8 @@ class AgentLoop:
         tools: ToolRunner,
         max_steps: int = 8,
         max_seconds: float = 180.0,
+        # Approval *tokens* from `approval_token`, not tool names. See the
+        # note above the helper: a name grants nothing.
         approved_tools: Sequence[str] = (),
     ) -> None:
         self._provider = provider
@@ -188,8 +232,10 @@ class AgentLoop:
             step = AgentStep(index=index, kind="tool", latency_ms=step_ms)
             for invocation in result.tool_calls:
                 observation, ok, decision = await self._invoke(invocation)
-                if decision == "confirm" and invocation.name not in pending:
-                    pending.append(invocation.name)
+                if decision == "confirm":
+                    token = approval_token(invocation.name, invocation.arguments)
+                    if token not in pending:
+                        pending.append(token)
                 step.tool_calls.append(
                     {
                         "name": invocation.name,
@@ -233,7 +279,9 @@ class AgentLoop:
 
     async def _invoke(self, invocation: ToolInvocation) -> tuple[str, bool, str]:
         """Run one call and turn the outcome into an observation."""
-        confirmed = invocation.name in self._approved
+        # The token, never the bare name. A name-only grant now matches
+        # nothing, which fails closed for any caller still passing one.
+        confirmed = approval_token(invocation.name, invocation.arguments) in self._approved
         log.info(
             "agent.tool_call",
             tool=invocation.name,

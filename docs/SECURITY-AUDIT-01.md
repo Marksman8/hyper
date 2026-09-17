@@ -15,7 +15,7 @@ be true of. Every fix below landed with a test that was red first.
 | | Finding | Severity | Status |
 |---|---|---|---|
 | 1 | The kill switch did not gate `ToolExecutor` | critical | **fixed** — `cdee879` |
-| 2 | An approval is granted per tool *name* and spends unboundedly | high | open |
+| 2 | An approval is granted per tool *name* and spends unboundedly | high | **fixed** |
 | 3 | `run_python` is outside the workspace guard and can delete the kill switch | **critical** | **fixed** — denied by default |
 | 4 | The stop does not interrupt work already in flight | medium | open |
 | 5 | Two approval systems exist; the strong one is not on the tool path | medium | open |
@@ -93,18 +93,44 @@ Step 4 needs no malice from the model — a retry after a failure, or a
 differently-sampled second run at temperature 0.7, gets there on its own. With
 an injected instruction in a file or a screenshot it is deliberate.
 
-### Demonstrating it
+### Fixed
 
-A test with a stub provider that returns a benign call on the first pass and a
-different-argument call on the second, asserting the second reaches the tool
-with `confirmed=True` having shown no dialog. That test should be written red
-before anything is changed.
+An approval is now a **token** rather than a name: `name:fingerprint`, where the
+fingerprint is a SHA-256 of `[name, arguments]` canonicalised with sorted keys.
+`approval_token()` and `tool_name()` live in `core/agent.py`.
 
-### What a fix must be true of
+```python
+confirmed = approval_token(invocation.name, invocation.arguments) in self._approved
+```
 
-An approval binds to **(tool, arguments)**, not to a tool name. Re-prompt when
-the arguments differ from the ones a human saw. Bounded use — single-use is the
-right default, since finding 5 already has the machinery for it.
+Four properties came out of the shape:
+
+- **A bare tool name now grants nothing.** Any caller still passing
+  pre-fix names fails closed rather than silently granting everything — which
+  is the right direction for a change to an authorisation path.
+- **Key order does not matter.** A model re-emitting the same call with its
+  arguments in a different order produces the same token, so the desktop's
+  re-run does not prompt twice for one decision.
+- **The name and arguments are hashed as one JSON array**, not concatenated
+  with a separator — so no separator has to be chosen and none can be forged by
+  a tool name containing it.
+- **It is still a plain string.** `AgentRequest.approve`,
+  `AgentResponse.pending_confirmations`, `TaskResult` and the desktop client
+  all keep their existing `list[str]` shape. Only the contents got specific.
+
+`ApprovalDialog` renders through `tool_name()`, so a person still reads
+"write_file" and never sees a fingerprint.
+
+Five tests, red first, in `test_agent_loop.py`: a grant for one path does not
+authorise another; a grant does hold for the exact call it was given for; key
+order is irrelevant; a bare name grants nothing; and `pending_confirmations`
+carries the binding rather than just a name.
+
+### Still open
+
+Single use. A token authorises its exact call **any number of times** within the
+task. Finding 5 already has the machinery for burning an approval on redemption,
+and that is where this should land rather than being reimplemented here.
 
 ---
 
@@ -325,10 +351,9 @@ different arguments.
    denied by default.
 2. ~~**Finding 6.**~~ **Done.** The agent loop reaches the model, and its stop
    check runs.
-3. **Finding 5.** Token instead of boolean. This is the structural change and
+3. ~~**Finding 2.**~~ **Done.** Approvals bind to arguments.
+4. **Finding 5.** Token instead of boolean. This is the structural change and
    it should land before finding 2's tests, because it is what makes them pass.
-4. **Finding 2.** Bind approvals to arguments; stop re-running tasks with a
-   name-level grant.
 5. **Finding 4.** Terminate child processes on stop; declare which tools cannot
    be interrupted.
 6. **Finding 3, the rest.** Decide and record where the switch lives and what

@@ -36,9 +36,13 @@ class AgentRequest(BaseModel):
 
     message: str = Field(min_length=1, max_length=100_000)
     session_id: str | None = None
-    # Tools a human authorises for this task, named up front. The model cannot
-    # add to this list; anything else it asks for comes back as a refusal it
-    # has to explain rather than route around.
+    # Approval *tokens* a human authorises for this task, supplied up front:
+    # `name:fingerprint`, as returned in a previous response's
+    # `pending_confirmations`. A bare tool name grants nothing (audit 01
+    # finding 2) -- an approval names one call with one set of arguments, not a
+    # capability held for the rest of the task. The model cannot add to this
+    # list; anything else it asks for comes back as a refusal it has to explain
+    # rather than route around.
     approve: list[str] = Field(default_factory=list)
     max_steps: int | None = Field(default=None, ge=1, le=50)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
@@ -65,6 +69,9 @@ class AgentResponse(BaseModel):
     # can tell "done" from "gave up".
     stopped_early: bool = False
     stop_reason: str = "complete"
+    # Approval tokens for the calls that were refused pending a human, bound to
+    # the arguments the model actually asked for. Pass them back verbatim in
+    # `approve` to authorise exactly those calls.
     pending_confirmations: list[str] = Field(default_factory=list)
 
 

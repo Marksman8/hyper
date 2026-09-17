@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from aura.core.agent import AgentLoop
+from aura.core.agent import AgentLoop, approval_token, tool_name
 from aura.core.types import (
     ChatChunk,
     ChatResult,
@@ -181,13 +181,16 @@ async def test_an_unapproved_tool_is_refused_and_reported() -> None:
     outcome = await AgentLoop(provider, runner).run(start())
 
     assert runner.calls[0][2] is False, "the loop confirmed a call by itself"
-    assert outcome.pending_confirmations == ["write_file"]
+    assert [tool_name(t) for t in outcome.pending_confirmations] == ["write_file"]
 
 
 async def test_only_a_human_supplied_approval_confirms_a_call() -> None:
-    provider = ScriptedProvider([wants("write_file", path="x", content="y"), answer("done")])
+    args = {"path": "x", "content": "y"}
+    provider = ScriptedProvider([wants("write_file", **args), answer("done")])
     runner = FakeRunner()
-    await AgentLoop(provider, runner, approved_tools=["write_file"]).run(start())
+    await AgentLoop(
+        provider, runner, approved_tools=[approval_token("write_file", args)]
+    ).run(start())
 
     assert runner.calls[0][2] is True
 
@@ -195,9 +198,85 @@ async def test_only_a_human_supplied_approval_confirms_a_call() -> None:
 async def test_approving_one_tool_does_not_approve_another() -> None:
     provider = ScriptedProvider([wants("run_python", code="x"), answer("no")])
     runner = FakeRunner({"run_python": (False, "needs confirmation", "confirm")})
+    await AgentLoop(
+        provider,
+        runner,
+        approved_tools=[approval_token("write_file", {"path": "x", "content": "y"})],
+    ).run(start())
+
+    assert runner.calls[0][2] is False
+
+
+# -- security audit 01, finding 2 -------------------------------------------
+
+
+async def test_an_approval_does_not_carry_to_different_arguments() -> None:
+    """Audit 01 finding 2. The escalation this whole binding exists to stop.
+
+    Consent is collected per call *with arguments* -- `executor.py::_describe`
+    is explicit that "click_element" is not a decision and
+    "click_element(name='Send')" is. It used to be enforced per name, so an
+    approval of one call authorised every later call to that tool.
+
+    That mattered because `desktop/app.py` does not resume the approved call:
+    it re-runs the whole task with the name pre-approved, and the model is
+    re-prompted from scratch. Nothing pinned the second run's arguments to the
+    ones a human read. Approve `write_file(path='notes.md')` and the retry was
+    free to write anywhere.
+    """
+    approved = approval_token("write_file", {"path": "notes.md", "content": "safe"})
+    provider = ScriptedProvider(
+        [wants("write_file", path="C:/startup/run.bat", content="evil"), answer("done")]
+    )
+    runner = FakeRunner({"write_file": (False, "needs confirmation", "confirm")})
+    outcome = await AgentLoop(provider, runner, approved_tools=[approved]).run(start())
+
+    assert runner.calls[0][2] is False, "a grant for one path authorised another"
+    assert outcome.pending_confirmations != []
+
+
+async def test_an_approval_holds_for_the_exact_call_it_was_given_for() -> None:
+    """The other half: a re-run of the same task must not re-prompt forever."""
+    args = {"path": "notes.md", "content": "safe"}
+    provider = ScriptedProvider([wants("write_file", **args), answer("done")])
+    runner = FakeRunner()
+    await AgentLoop(
+        provider, runner, approved_tools=[approval_token("write_file", args)]
+    ).run(start())
+
+    assert runner.calls[0][2] is True
+
+
+async def test_argument_order_does_not_change_the_token() -> None:
+    """A model re-emitting the same call with keys in another order is the same
+    call, and must not be treated as a new one to approve."""
+    a = approval_token("write_file", {"path": "x", "content": "y"})
+    b = approval_token("write_file", {"content": "y", "path": "x"})
+    assert a == b
+
+
+async def test_a_bare_tool_name_no_longer_grants_anything() -> None:
+    """Fails closed. A caller still passing pre-finding-2 names grants nothing
+    rather than granting everything."""
+    provider = ScriptedProvider([wants("write_file", path="x", content="y"), answer("no")])
+    runner = FakeRunner({"write_file": (False, "needs confirmation", "confirm")})
     await AgentLoop(provider, runner, approved_tools=["write_file"]).run(start())
 
     assert runner.calls[0][2] is False
+
+
+async def test_pending_confirmations_carry_the_binding_not_just_a_name() -> None:
+    """The approver has to be able to hand back something argument-specific."""
+    provider = ScriptedProvider(
+        [wants("write_file", path="notes.md", content="hi"), answer("need approval")]
+    )
+    runner = FakeRunner({"write_file": (False, "needs confirmation", "confirm")})
+    outcome = await AgentLoop(provider, runner).run(start())
+
+    assert outcome.pending_confirmations == [
+        approval_token("write_file", {"path": "notes.md", "content": "hi"})
+    ]
+    assert tool_name(outcome.pending_confirmations[0]) == "write_file"
 
 
 async def test_a_refusal_tells_the_model_not_to_retry() -> None:

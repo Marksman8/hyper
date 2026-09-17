@@ -23,6 +23,8 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import font as tkfont
 
+from aura.core.agent import tool_name
+
 _BG = "#111318"
 _FG = "#e6e8ec"
 _DIM = "#8b93a1"
@@ -45,6 +47,8 @@ class ApprovalDialog:
     def __init__(
         self,
         parent: tk.Tk,
+        # Approval tokens from `AgentOutcome.pending_confirmations`, rendered
+        # through `tool_name`. Passed back verbatim when approved.
         tools: list[str],
         task: str,
         explanation: str = "",
@@ -87,7 +91,11 @@ class ApprovalDialog:
 
         listing = tk.Frame(body, bg="#1b1f27", padx=12, pady=10)
         listing.pack(fill="x", pady=(12, 0))
-        for name in tools:
+        for token in tools:
+            # `tools` carries approval tokens (audit 01 finding 2), which are
+            # `name:fingerprint`. The fingerprint binds the grant to the exact
+            # arguments; it is not something to show a person.
+            name = tool_name(token)
             plain = _PLAIN_ENGLISH.get(name, "perform an action outside the read-only set")
             row = tk.Frame(listing, bg="#1b1f27")
             row.pack(fill="x")
