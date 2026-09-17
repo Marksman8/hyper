@@ -22,6 +22,7 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
+from dataclasses import replace
 from typing import Any
 
 from aura.core.emitter import NULL_EMITTER, EventEmitter
@@ -166,6 +167,14 @@ class ToolExecutor:
             return result
 
         # -- execute ---------------------------------------------------------
+        #
+        # The stop goes with it. Checking it once at entry only answers "may
+        # this start"; a tool that runs for a minute needs to be able to ask
+        # again while it waits. Audit 01 finding 4.
+        if self._estop is not None and ctx.should_stop is None:
+            estop = self._estop
+            ctx = replace(ctx, should_stop=lambda: bool(estop.engaged))
+
         result = await self._run_guarded(tool, call, ctx, started)
         await self._record(call, result, spec.level)
         return result

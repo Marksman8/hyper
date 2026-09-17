@@ -52,6 +52,11 @@ from aura.tools.types import ToolCall, ToolContext, ToolResult, ToolSpec
 
 log = get_logger(__name__)
 
+# How often the poll loop asks whether the stop has been engaged. Short enough
+# that "stop" feels immediate, long enough that a snippet doing real work is not
+# competing with the loop for the GIL.
+_POLL_INTERVAL_S = 0.2
+
 MAX_OUTPUT_CHARS = 20_000
 MAX_CODE_CHARS = 100_000
 
@@ -125,29 +130,61 @@ class RunPythonTool(Tool):
             script.write_text(code, encoding="utf-8")
 
             try:
-                proc = subprocess.run(  # noqa: S603 - fixed interpreter, no shell
+                proc = subprocess.Popen(  # noqa: S603 - fixed interpreter, no shell
                     [self._interpreter, str(script)],
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
-                    timeout=timeout_s,
                     cwd=cwd,
                     # No shell, ever: the snippet is a file argument, so shell
                     # metacharacters in the code cannot become shell syntax.
                     shell=False,
                 )
-            except subprocess.TimeoutExpired:
-                log.warning("tools.python_timeout", timeout_s=timeout_s)
-                return ToolResult.failure(
-                    call,
-                    f"Execution exceeded {timeout_s:.0f}s and was terminated.",
-                    data={"timeout_s": timeout_s},
-                    duration_ms=int((time.perf_counter() - started) * 1000),
-                )
             except OSError as exc:
                 return ToolResult.failure(call, f"Could not start Python: {exc}")
 
-        stdout = _clip(proc.stdout)
-        stderr = _clip(proc.stderr)
+            # `Popen` and a poll loop rather than `subprocess.run(timeout=)`,
+            # so the emergency stop can reach a snippet that is already
+            # running. Audit 01 finding 4: the stop was only ever checked
+            # before a tool started, and a 120 s budget is a long time to keep
+            # acting after a person has said stop.
+            stop = ctx.should_stop
+            deadline = time.monotonic() + timeout_s
+            stopped = False
+            while True:
+                try:
+                    stdout_raw, stderr_raw = proc.communicate(timeout=_POLL_INTERVAL_S)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+
+                if stop is not None and stop():
+                    stopped = True
+                    _terminate(proc)
+                    break
+                if time.monotonic() >= deadline:
+                    _terminate(proc)
+                    log.warning("tools.python_timeout", timeout_s=timeout_s)
+                    return ToolResult.failure(
+                        call,
+                        f"Execution exceeded {timeout_s:.0f}s and was terminated.",
+                        data={"timeout_s": timeout_s},
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                    )
+
+            if stopped:
+                log.warning("tools.python_killed_by_estop")
+                return ToolResult.failure(
+                    call,
+                    "The emergency stop was engaged while this snippet was "
+                    "running, so the process was terminated. Any work it had "
+                    "already done is not undone.",
+                    decision="deny",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+
+        stdout = _clip(stdout_raw)
+        stderr = _clip(stderr_raw)
         duration_ms = int((time.perf_counter() - started) * 1000)
 
         parts: list[str] = []
@@ -173,6 +210,24 @@ class RunPythonTool(Tool):
             )
 
         return ToolResult.success(call, body, data=data, duration_ms=duration_ms)
+
+
+def _terminate(proc: subprocess.Popen[str]) -> None:
+    """Stop the child, escalating if it does not go quietly.
+
+    A subprocess is the reason this tool can be stopped at all: the executor's
+    worker thread cannot be killed, and a snippet that ignores SIGTERM would
+    otherwise outlive the decision to stop it.
+    """
+    proc.terminate()
+    try:
+        proc.communicate(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.communicate(timeout=2.0)
+        except subprocess.TimeoutExpired:  # pragma: no cover - the OS gave up
+            log.error("tools.python_would_not_die", pid=proc.pid)
 
 
 def _clip(text: str) -> str:

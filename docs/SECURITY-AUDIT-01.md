@@ -17,7 +17,7 @@ be true of. Every fix below landed with a test that was red first.
 | 1 | The kill switch did not gate `ToolExecutor` | critical | **fixed** — `cdee879` |
 | 2 | An approval is granted per tool *name* and spends unboundedly | high | **fixed** |
 | 3 | `run_python` is outside the workspace guard and can delete the kill switch | **critical** | **fixed** — denied by default |
-| 4 | The stop does not interrupt work already in flight | medium | open |
+| 4 | The stop does not interrupt work already in flight | medium | **fixed** for subprocesses |
 | 5 | Two approval systems exist; the strong one is not on the tool path | medium | open |
 | 6 | `act()` raised `AttributeError`; the agent loop's stop check never ran | **critical** | **fixed** |
 
@@ -297,12 +297,34 @@ switch does stop new work, from a file manager, without AURA's cooperation. But
 "engage the stop and AURA stops" is how a person will read it, and for up to two
 minutes it is not true of the tool most able to do damage.
 
-### What a fix must be true of
+### Fixed, for the tools that can be
 
-Tools that run subprocesses hold the handle and can terminate it. `run_python`
-and the application launcher should poll the stop while waiting and kill the
-child when it engages. Tools that cannot be interrupted should say so in their
-spec, so the gap is declared rather than discovered.
+`ToolContext` gained `should_stop`, which `ToolExecutor` binds to its own switch
+before handing the context to a tool — so a tool can ask the question while it
+waits rather than only before it starts.
+
+`run_python` now uses `Popen` with a poll loop instead of
+`subprocess.run(timeout=)`, checking the stop every 200 ms and terminating the
+child when it engages (escalating to `kill` after two seconds). The inner
+timeout moved into the same loop, since `subprocess.run`'s own no longer
+applies. Four tests: the child dies within seconds rather than running its full
+30, the ordinary path is unaffected, a missing `should_stop` still works, and
+the timeout still fires.
+
+### Still open
+
+**Threads remain uninterruptible**, and that is a property of Python rather than
+of this design — the executor's own comment has always said so. The tools that
+can run long enough to matter are the ones that spawn a subprocess, and those
+are now covered.
+
+`open_application` was left alone: it starts a process and returns rather than
+waiting on one, so there is nothing in flight to interrupt.
+
+What is still missing is **declaration**. A tool that cannot be interrupted
+should say so in its `ToolSpec`, so the gap is visible in the registry rather
+than discovered by engaging the stop and watching nothing happen. That is a
+small change and it is not made here.
 
 ---
 

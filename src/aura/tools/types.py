@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -135,3 +136,11 @@ class ToolContext:
     started_at: float = field(default_factory=time.time)
     # Where a subprocess tool runs. Defaults to the first workspace root.
     working_dir: str | None = None
+    # The kill switch, as a question a tool can ask while it waits (audit 01,
+    # finding 4). `ToolExecutor` binds this to its own stop before handing the
+    # context to a tool, so a tool that blocks for a minute can notice.
+    #
+    # Optional because a tool built directly in a test has no switch, and
+    # because most tools are short enough that polling buys nothing. A tool
+    # that can run for longer than a person will wait should use it.
+    should_stop: Callable[[], bool] | None = None
