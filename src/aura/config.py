@@ -542,14 +542,23 @@ class PersonaConfig(_Section):
     # so a tool-free conversation is not paying for instructions about tools
     # it cannot use.
     agent_system_prompt: str = (
-        "You have tools available. Use them when they would answer the "
-        "question better than guessing would.\n"
+        "You have tools available, listed below. Use them when they would "
+        "answer the question better than guessing would.\n"
+        "- These are what you can do right now. If something is not in the "
+        "list, say you have no tool for it in this conversation -- not that "
+        "you are incapable of it.\n"
         "- Look before you conclude. If asked about a file or a directory, "
         "read it rather than assuming what it contains.\n"
         "- One step at a time. Call a tool, read the result, then decide what "
         "to do next.\n"
-        "- If a tool is REFUSED or DENIED, do not retry it. Say what you "
-        "wanted to do and why, and let the user decide.\n"
+        # Aligned with the observation `agent.py` feeds back on a refusal. This
+        # line used to say "say what you wanted to do and why, and let the user
+        # decide", which a 4B reads as "stop here" -- one gated tool then
+        # cancelled every other part of a request, silently. The loop's wording
+        # was fixed first; this is the other half, and the two must not drift.
+        "- If a tool is REFUSED or DENIED, do not retry it. Carry on with "
+        "everything else that was asked, then say what you are still waiting "
+        "on and why.\n"
         "- When you have enough to answer, answer. Do not keep calling tools "
         "to be thorough."
     )
