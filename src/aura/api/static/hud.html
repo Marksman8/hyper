@@ -276,8 +276,8 @@
         <form class="composer" id="composer">
           <input type="text" id="say" autocomplete="off" placeholder="say something…"
                  aria-label="message to AURA">
-          <label title="Off: plain conversation. On: AURA may propose tool calls, still under the permission gate.">
-            <input type="checkbox" id="use-tools"> tools
+          <label title="On: AURA may propose tool calls. The permission gate still decides -- reads run, writes ask, level 4 is denied. Off: plain conversation, no tools at all.">
+            <input type="checkbox" id="use-tools" checked> tools
           </label>
           <label title="Speak replies aloud in AURA's own voice, and ask her to write for the ear rather than the page.">
             <input type="checkbox" id="use-voice"> voice
@@ -576,14 +576,24 @@ $("btn-estop").addEventListener("click", async () => {
 
 // -- conversation -----------------------------------------------------------
 //
-// Two routes, chosen by the `tools` checkbox, and the choice is the point.
-// Unchecked goes to /v1/chat and AURA cannot act at all. Checked goes to
-// /v1/agent, where she may *propose* tool calls -- which still pass the
-// permission gate, and anything above the autonomous ceiling comes back as a
-// refusal carrying an approval token rather than as an action.
+// Two routes, chosen by the `tools` checkbox. Unchecked goes to /v1/chat and
+// AURA cannot act at all. Checked goes to /v1/agent, where she may *propose*
+// tool calls -- which still pass the permission gate, and anything above the
+// autonomous ceiling comes back as a refusal carrying an approval token rather
+// than as an action.
 //
-// Default is off. Capability is opt-in, which is the same rule the rest of the
-// system runs on.
+// **Default is on**, and it was off first. Asked "can you open antigravity"
+// with it off, AURA replied that she could not "control hardware or change
+// physical laws" -- while `list_applications` had three matching entries. With
+// tools off she cannot see her own capabilities, so she answers from general
+// knowledge and is confidently wrong about herself.
+//
+// On is also not the looser setting it looks like. `tools.max_autonomous_level`
+// is 1, so ticking this grants exactly what the configured policy already
+// grants: reads run, writes and launches come back as approval requests, and
+// LEVEL 4 is denied outright. Leaving it off was *more* restrictive than the
+// policy the user configured, which is a strange default to ship. The gate is
+// the boundary; this box is only which route the message takes.
 
 let chatSession = null;
 let busy = false;
