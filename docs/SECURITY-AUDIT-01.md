@@ -18,7 +18,7 @@ be true of. Every fix below landed with a test that was red first.
 | 2 | An approval is granted per tool *name* and spends unboundedly | high | **fixed** |
 | 3 | `run_python` is outside the workspace guard and can delete the kill switch | **critical** | **fixed** — denied by default |
 | 4 | The stop does not interrupt work already in flight | medium | **fixed** for subprocesses |
-| 5 | Two approval systems exist; the strong one is not on the tool path | medium | open |
+| 5 | Two approval systems exist; the strong one is not on the tool path | medium | **deferred** 2026-09-17 |
 | 6 | `act()` raised `AttributeError`; the agent loop's stop check never ran | **critical** | **fixed** |
 
 Finding 6 was not in the original series. It was found by `mypy` while fixing
@@ -361,9 +361,34 @@ against the registry with the request id. `confirmed: bool` then becomes
 unrepresentable rather than merely discouraged — the same move
 `evolution/space.py` makes with its allow-list, and for the same reason.
 
-That single change closes finding 2 as a side effect: an approval that must be
-redeemed against a request id cannot be re-spent on a restarted task with
-different arguments.
+### Deferred, 2026-09-17
+
+**Not because it is wrong. Because finding 2 took its urgency away.**
+
+The escalation this would have closed is closed: an approval now binds to the
+arguments it was granted for, so it cannot be re-spent on a restarted task with
+a substituted path. What remains is that a token is reusable *within* its task
+for the identical call, and that the two systems have not been merged.
+
+The refactor touches `ToolExecutor.execute`, `ToolCall`, `AgentRequest`,
+`ExecutorToolRunner`, the agent loop and the desktop client — five to six hours
+across an authorisation path, which is the worst place to be halfway through
+when a session ends. The findings that were live exploits are fixed; this is
+the one that is structure.
+
+**What revives it**, whichever comes first:
+
+- The issue-approve-**resume** loop from 10C. Today an approval re-runs the
+  whole task, which is why finding 2 existed at all. Resuming the specific call
+  needs the registry's `request_id` binding, so that work and this fix are the
+  same work and should not be done twice.
+- A second approver. The nonce path exists because the presence overlay is not
+  the only thing that might grant; the moment something other than the desktop
+  dialog can approve, a bare boolean is no longer defensible.
+- Any tool above LEVEL 2 becoming reachable by default.
+
+Until one of those, `approvals.py` stays built, tested and unused on the tool
+path — which is recorded here rather than left to be rediscovered.
 
 ---
 
