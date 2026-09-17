@@ -22,6 +22,7 @@ from aura.api.speech_route import (
     speech_status,
 )
 from aura.voice.synth import _wav_bytes
+from aura.voice.tts.normalize import for_speech
 
 
 def _service() -> SpeechService:
@@ -138,3 +139,62 @@ def test_unspeakable_text_gets_its_own_exit_code() -> None:
         pytest.skip("no voice installed on this machine")
     if done.returncode == NOTHING_SPEAKABLE:
         assert not done.stdout
+
+
+# -- what actually gets spoken ----------------------------------------------
+
+
+def test_markdown_never_reaches_the_voice() -> None:
+    """Reported from a real session: AURA read a bulleted answer out as
+    "star star Structure star star".
+
+    `normalize.py` has handled this since Phase 2 and says so in its own
+    docstring. `aura voice` called it; `aura.voice.synth` did not, so the
+    console's speech path was the one place the markup survived.
+    """
+    reply = "\n".join(
+        [
+            "*   **Structure**: A node looks like `[data, next]`.",
+            "*   **Access**: Retrieval requires traversing from the head.",
+            "## Summary",
+            "It is a [linked list](https://example.com/ll).",
+        ]
+    )
+    spoken = for_speech(reply)
+
+    for markup in ("*", "#", "`", "](", "http"):
+        assert markup not in spoken, f"{markup!r} survived into spoken text"
+    assert "Structure" in spoken and "linked list" in spoken
+
+
+def test_latex_delimiters_do_not_become_the_word_dollar() -> None:
+    """The other half of the same report: `$O(1)$` was read as "dollar O of
+    one dollar". The expression survives; only the fence goes."""
+    spoken = for_speech("Insertion is ($O(1)$) when the position is known.")
+    assert "$" not in spoken
+    assert "O(1)" in spoken
+
+
+def test_a_reply_that_is_only_markup_is_not_sent_to_the_voice() -> None:
+    """Otherwise the child spawns, loads a model and synthesises silence."""
+    assert for_speech("***") == ""
+    assert for_speech("---") == ""
+
+
+def test_the_synth_child_strips_markup_before_speaking() -> None:
+    """End to end, through the process Core actually spawns."""
+    import subprocess
+    import sys
+
+    from aura.api.speech_route import NOTHING_SPEAKABLE
+
+    done = subprocess.run(
+        [sys.executable, "-m", "aura.voice.synth"],
+        input=b"***",
+        capture_output=True,
+        timeout=120,
+    )
+    if done.returncode not in (0, NOTHING_SPEAKABLE):
+        pytest.skip("no voice installed on this machine")
+    assert done.returncode == NOTHING_SPEAKABLE
+    assert not done.stdout

@@ -720,6 +720,7 @@ def _install_routes(app: FastAPI) -> None:
             session_id=body.session_id,
             params=params,
             approve=body.approve,
+            spoken=body.spoken,
         )
         outcome = result.agent
         return AgentResponse(

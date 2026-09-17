@@ -81,11 +81,22 @@ def main() -> int:
 
     from aura.config import get_settings
     from aura.voice.factory import build_tts
+    from aura.voice.tts.normalize import for_speech
+
+    # Strip the markup before synthesising. The first version of this module
+    # did not, and AURA read a bulleted answer out as "star star Structure star
+    # star" -- the exact failure `normalize.py` was written for and says so in
+    # its own docstring. `aura voice` has always called this; the console path
+    # simply skipped it.
+    speakable = for_speech(text)
+    if not speakable:
+        print("nothing speakable", file=sys.stderr)
+        return 3
 
     tts = build_tts(get_settings())
     tts.load()
 
-    chunks = list(tts.synthesize(text))
+    chunks = list(tts.synthesize(speakable))
     if not chunks:
         # Punctuation, an emoji, anything that normalises to nothing speakable.
         # A distinct code so the caller can say so rather than returning a

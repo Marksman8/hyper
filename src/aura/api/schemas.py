@@ -57,6 +57,11 @@ class AgentRequest(BaseModel):
     approve: list[str] = Field(default_factory=list)
     max_steps: int | None = Field(default=None, ge=1, le=50)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    # The reply will be spoken, so ask for prose rather than a spec sheet.
+    # `ChatRequest` has carried this since Phase 2; the agent path never did,
+    # so a console with the voice on got bullet lists read aloud with the
+    # markup stripped off -- correct, and still not how a person talks.
+    spoken: bool = False
 
 
 class AgentStepOut(BaseModel):

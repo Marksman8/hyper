@@ -279,7 +279,7 @@
           <label title="Off: plain conversation. On: AURA may propose tool calls, still under the permission gate.">
             <input type="checkbox" id="use-tools"> tools
           </label>
-          <label title="Speak replies aloud in AURA's own voice. Loads the voice on first use and unloads it when idle.">
+          <label title="Speak replies aloud in AURA's own voice, and ask her to write for the ear rather than the page.">
             <input type="checkbox" id="use-voice"> voice
           </label>
           <button type="submit" id="send">SEND</button>
@@ -624,9 +624,16 @@ async function send(text, approve) {
   const thinking = turn("sys", withTools ? "thinking, tools available…" : "thinking…");
 
   try {
+    // `spoken` changes how AURA *writes*, not just how the text is read out.
+    // With it, the voice system prompt asks for plain sentences instead of a
+    // spec sheet -- which is the difference between hearing "there are three:
+    // first the head, second the tail..." and hearing a stripped bullet list
+    // that still sounds like a document. Stripping markup afterwards is the
+    // second defence, not the first.
+    const aloud = $("use-voice").checked;
     const body = withTools
-      ? { message: text, session_id: chatSession, approve }
-      : { message: text, session_id: chatSession };
+      ? { message: text, session_id: chatSession, approve, spoken: aloud }
+      : { message: text, session_id: chatSession, spoken: aloud };
     const r = await api(withTools ? "/v1/agent" : "/v1/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
