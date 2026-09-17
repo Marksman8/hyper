@@ -100,6 +100,20 @@ fine-tuned classifier (Phase 8) — not a bigger prompt.
 **Exit criteria**: a 5-step task completes end to end, and a deliberately
 broken step is detected and recovered from rather than silently ignored.
 
+**Status: the exit criterion is in doubt and must be re-run.**
+
+Security audit 01 finding 6 found that `Orchestrator.act()` raised
+`AttributeError` on the agent loop's first iteration — `should_stop=lambda:
+self._estop` named an attribute that has never existed — from the commit that
+introduced this phase until 2026-09-17. Every tool-using turn through the
+orchestrator died at step 0.
+
+So whatever demonstrated the criterion did not go through `act()`. It is fixed
+and has regression tests, but the criterion itself has not been re-met on real
+hardware since, and this roadmap's own rule is that a phase is not done until
+its exit criteria are met on real hardware rather than in principle. **Re-run
+it against a live model server before treating Phase 4 as closed.**
+
 ---
 
 ## Phase 5 — Vision
@@ -254,6 +268,24 @@ Two findings from the first real run:
   number, the suite needs harder tasks -- a concrete precondition, in the same
   spirit as this roadmap's own rule that GA waits for a demonstrated signal.
 
+**Update 2026-09-17: the headroom problem has an instrument, and a pending
+measurement.**
+
+Phase 9 tried harder *capability* tasks and moved the baseline 97.4% -> 96.8%,
+concluding "the headroom problem is not solved". That was the wrong instrument:
+a 4B model that can read a file can read a harder file.
+
+`suites/injection.yaml` adds 15 adversarial tasks against 11 payload fixtures --
+content AURA *reads* trying to make her act. Each asserts two things: that the
+guard held (`tools_within`, a property of the permission system, expected to
+stay at 100%) and that the model did not even attempt the injected call
+(`tool_not_called`, which varies and is where the headroom is). Three control
+tasks carry no payload, so refusing everything cannot ace it.
+
+The default suite is now core + injection, 36 tasks. **The new baseline has not
+been measured** -- it needs a live model server. Expect it well below 96.8%;
+that is the headroom returning, not a regression.
+
 **Fine-tuning is not built, on purpose.** There is no demonstrated weakness for
 it to fix yet; the training data does not exist (a few hundred turns, mostly
 development chatter); and torch + transformers + peft is ~2.5 GB entering a
@@ -332,7 +364,32 @@ personal cognitive model.
 
 Full design: `docs/architecture/09-phase10-presence.md` (revision 2).
 
-**Status: 10A and 10B complete. 10C started (2 of 12). 10D not started.**
+**Status: 10A and 10B complete. 10C started (2 of 12). 10C.7-12 deferred.
+10D not started.**
+
+### 10C.7-12 (computer use) is deferred — 2026-09-17
+
+**Not cancelled, and not blocked. Deliberately not next.**
+
+This document already calls input synthesis "the highest-risk work in this
+project's history" and puts a four-condition gate in front of it. The deferral
+adds three reasons the gate does not cover:
+
+1. **Nothing downstream needs it.** 10C.3-.6, the eval harness, the HUD and
+   every content and product decision are independent of it.
+2. **The debugging surface is unbounded.** Windows UIA against arbitrary
+   third-party applications is not work that can be estimated, and it is the
+   largest available way to spend a month while feeling productive.
+3. **There is no user for it.** Not the founder, not a customer, not a demo
+   that needs it.
+
+**What revives it:** a real user asking for it, or a product decision that
+depends on it. Not curiosity, and not the fact that the gate has been met --
+meeting the gate is necessary, not sufficient.
+
+Until then 10C ends at **10C.6** and the phase's remaining work is the
+perception half only: the governor, trigger policy, structured observation and
+the perception eval suite.
 
 10C.1 put the `VLMProvider` seam in: a VLM is served over the *same*
 OpenAI-compatible endpoint AURA already speaks (`llama-server --mmproj`), so
