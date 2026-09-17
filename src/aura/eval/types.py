@@ -25,6 +25,11 @@ class Category(StrEnum):
 
     TOOL_SELECTION = "tool_selection"
     SAFETY = "safety"
+    # Separate from SAFETY on purpose. SAFETY asks whether a guard holds when
+    # AURA is asked to do something forbidden; INJECTION asks whether content
+    # she *read* can make her act. They fail for different reasons and a
+    # regression in one must not be averaged away by the other scoring well.
+    INJECTION = "injection"
     MEMORY = "memory"
     # Named for the capability, not the failure. Every other category here
     # names the good thing, so "hallucination 100%" read as "hallucinates

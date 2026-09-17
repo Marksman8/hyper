@@ -16,8 +16,25 @@ import yaml
 from aura.errors import AuraError
 from aura.eval.types import Category, Check, Task
 
-# Shipped with the project; `aura eval` uses it unless told otherwise.
-DEFAULT_SUITE = Path(__file__).with_name("suites") / "core.yaml"
+_SUITES = Path(__file__).with_name("suites")
+
+# Shipped with the project; `aura eval` uses all of these unless told otherwise.
+#
+# Two files rather than one, and the default is both. `core.yaml` measures
+# capability; `injection.yaml` measures whether content AURA reads can make her
+# act. Keeping them separate lets the injection corpus be run and published on
+# its own -- it is the benchmark, and a benchmark nobody else can run against
+# their own agent is not one -- while the default score still includes it.
+#
+# Including it in the default is the point. Phase 8 recorded that the suite was
+# too easy (97.4%, 2.6% of headroom) and Phase 9 tried harder *capability*
+# tasks, which moved it to 96.8%. Adversarial tasks are what actually restores
+# headroom, because the model half of them genuinely fails.
+DEFAULT_SUITES: tuple[Path, ...] = (_SUITES / "core.yaml", _SUITES / "injection.yaml")
+
+# Kept for callers that want just the capability suite by name.
+DEFAULT_SUITE = _SUITES / "core.yaml"
+INJECTION_SUITE = _SUITES / "injection.yaml"
 
 
 class SuiteError(AuraError):
@@ -74,9 +91,7 @@ def _task(raw: Any, index: int) -> Task:
     )
 
 
-def load_suite(path: Path | None = None) -> list[Task]:
-    """Read and validate a suite. Fails fast and completely."""
-    source = path or DEFAULT_SUITE
+def _load_one(source: Path, offset: int) -> list[Task]:
     if not source.exists():
         raise SuiteError(f"No suite at {source}")
 
@@ -89,13 +104,26 @@ def load_suite(path: Path | None = None) -> list[Task]:
     if not isinstance(raw_tasks, list) or not raw_tasks:
         raise SuiteError(f"{source} has no `tasks:` list")
 
-    tasks = [_task(raw, i) for i, raw in enumerate(raw_tasks)]
+    return [_task(raw, offset + i) for i, raw in enumerate(raw_tasks)]
+
+
+def load_suite(path: Path | None = None) -> list[Task]:
+    """Read and validate a suite. Fails fast and completely.
+
+    With no path, loads every file in `DEFAULT_SUITES`. Duplicate ids are an
+    error *across* files as well as within one: two tasks sharing an id would
+    silently overwrite each other in a report, which is the kind of thing that
+    makes a comparison quietly wrong.
+    """
+    sources = [path] if path is not None else list(DEFAULT_SUITES)
+
+    tasks: list[Task] = []
+    for source in sources:
+        tasks.extend(_load_one(source, len(tasks)))
 
     seen: set[str] = set()
     for task in tasks:
         if task.id in seen:
-            # Duplicate ids would silently overwrite each other in a report,
-            # which is the kind of thing that makes a comparison quietly wrong.
             raise SuiteError(f"duplicate task id {task.id!r}")
         seen.add(task.id)
     return tasks
