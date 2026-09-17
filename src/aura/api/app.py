@@ -11,6 +11,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
@@ -71,7 +72,11 @@ from aura.security.auth import load_or_create_token, verify_token
 
 log = get_logger(__name__)
 
-PUBLIC_PATHS = frozenset({"/healthz", "/docs", "/openapi.json", "/redoc"})
+# `/hud` is public because it is markup and contains no data: every byte it
+# displays comes from a route below, each of which still requires the bearer
+# token. Serving the shell without auth is what lets a browser open it at all
+# -- the page then asks for the token once and keeps it locally.
+PUBLIC_PATHS = frozenset({"/healthz", "/docs", "/openapi.json", "/redoc", "/hud"})
 
 
 @dataclass
@@ -380,6 +385,21 @@ def _install_routes(app: FastAPI) -> None:
                 vram_total_gb=res.vram_total_gb,
             ),
         )
+
+    @app.get("/hud", tags=["status"], include_in_schema=False)
+    async def hud() -> Any:
+        """The operator console.
+
+        A single static file, served rather than built. See the comment at the
+        top of `static/hud.html` for the rule it is written under: every lit
+        element resolves to a value one of these routes returned.
+        """
+        from fastapi.responses import FileResponse
+
+        page = Path(__file__).with_name("static") / "hud.html"
+        if not page.is_file():  # pragma: no cover - packaging failure
+            raise AuraError("The console is missing from this installation.")
+        return FileResponse(page, media_type="text/html")
 
     @app.get("/v1/config", tags=["status"])
     async def config(state: AppState = Depends(get_state)) -> dict[str, Any]:

@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AURA</title>
+<!--
+  The operator console.
+
+  One file, no build step, no framework. The project has kept a deliberate line
+  on toolchains -- torch stayed out for seven phases, PySide6 was measured
+  before it was adopted -- and a console that needs npm to change a label would
+  be the first thing to rot.
+
+  THE RULE THIS PAGE IS BUILT ON: every lit element resolves to a value the API
+  returned. A panel with no data renders dim and says so. No placeholder
+  numbers, no animated rings that mean nothing, no "neural load". The reference
+  images this borrows its look from are mostly fake gauges; the look is worth
+  taking and the gauges are not.
+
+  Each panel declares `data-source`, and tests/unit/test_hud.py asserts every
+  one resolves to a real route or a real event type. That is the same trick
+  10A.12 used for snapshot completeness, which caught a real contract
+  violation.
+
+  AUTH: this shell is public -- it is markup and contains no data. Every byte
+  it displays comes from a bearer-authenticated route. The token is asked for
+  once and kept in localStorage.
+
+  Not EventSource: it cannot send an Authorization header, and putting the
+  token in a query string would write it into every access log. fetch() with a
+  stream reader can, so the SSE framing is parsed by hand below.
+-->
+<style>
+  :root{
+    --bg:#0A1012; --panel:#0F1719; --panel-2:#131E20; --rule:#1E2E30;
+    --ink:#DCE8E7; --dim:#7B918F; --faint:#4A5D5C;
+    --accent:#4ECAD6; --ok:#5CC98D; --warn:#DFAE55; --bad:#E8807C;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:var(--mono);font-size:13px;line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* -- shell ------------------------------------------------------------- */
+  .app{display:grid;grid-template-rows:auto 1fr;height:100vh}
+  header{
+    display:flex;align-items:center;gap:18px;flex-wrap:wrap;
+    padding:10px 18px;border-bottom:1px solid var(--rule);background:var(--panel);
+  }
+  .brand{font-size:15px;font-weight:600;letter-spacing:.22em;color:var(--accent)}
+  .hgap{flex:1}
+  .hstat{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim)}
+  .hstat b{color:var(--ink);font-weight:500}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:0 0 auto}
+  .dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}
+  .dot.bad{background:var(--bad)}.dot.live{background:var(--accent)}
+  button{
+    font-family:var(--mono);font-size:11px;letter-spacing:.06em;
+    background:var(--panel-2);color:var(--ink);border:1px solid var(--rule);
+    padding:5px 11px;border-radius:2px;cursor:pointer;
+  }
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  button.danger{border-color:#3A2523;color:var(--bad)}
+  button.danger:hover{background:#2B1817;border-color:var(--bad)}
+  button.go{border-color:#1D3A2B;color:var(--ok)}
+  button.go:hover{background:#122A20;border-color:var(--ok)}
+
+  /* -- grid -------------------------------------------------------------- */
+  main{
+    display:grid;gap:1px;background:var(--rule);overflow:hidden;
+    grid-template-columns:minmax(0,1fr) minmax(0,1.25fr) minmax(0,1fr);
+    grid-template-rows:minmax(0,1fr) minmax(0,1fr);
+  }
+  @media (max-width:1100px){
+    main{grid-template-columns:minmax(0,1fr);grid-auto-rows:minmax(240px,auto);
+         grid-template-rows:none;overflow:auto}
+    .app{height:auto;min-height:100vh}
+  }
+  .panel{background:var(--panel);display:flex;flex-direction:column;min-height:0;min-width:0}
+  .panel > h2{
+    margin:0;padding:8px 14px;font-size:10.5px;font-weight:600;
+    letter-spacing:.16em;color:var(--dim);border-bottom:1px solid var(--rule);
+    display:flex;align-items:center;gap:8px;flex:0 0 auto;
+  }
+  .panel > h2 .src{margin-left:auto;color:var(--faint);font-size:9.5px;letter-spacing:.04em}
+  .body{padding:12px 14px;overflow:auto;flex:1;min-height:0}
+  .span2{grid-row:span 2}
+
+  /* -- primitives -------------------------------------------------------- */
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:3px 14px;align-items:baseline}
+  .kv dt{color:var(--dim);font-size:11px;white-space:nowrap}
+  .kv dd{margin:0;text-align:right;font-variant-numeric:tabular-nums;
+         overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .unlit{color:var(--faint);font-style:normal}
+  .bar{height:3px;background:var(--panel-2);border-radius:2px;overflow:hidden;margin-top:3px}
+  .bar i{display:block;height:100%;background:var(--accent);transition:width .4s ease}
+  .bar i.warn{background:var(--warn)} .bar i.bad{background:var(--bad)}
+  .empty{color:var(--faint);font-size:11.5px;padding:6px 0}
+
+  /* -- core diagram ------------------------------------------------------ */
+  .core{display:flex;flex-direction:column;align-items:center;gap:0;padding:6px 0 2px}
+  .core .ring{
+    width:74px;height:74px;border-radius:50%;display:grid;place-items:center;
+    border:1px solid var(--rule);color:var(--faint);font-size:22px;
+  }
+  .core .ring.live{border-color:var(--accent);color:var(--accent)}
+  .core .ring.bad{border-color:var(--bad);color:var(--bad)}
+  .core .state{font-size:11px;letter-spacing:.14em;color:var(--dim);margin-top:7px;
+               text-transform:uppercase;min-height:16px}
+  .spokes{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;width:100%;
+          margin-top:12px;background:var(--rule);border-top:1px solid var(--rule);
+          border-bottom:1px solid var(--rule)}
+  .spoke{background:var(--panel);padding:8px 6px;text-align:center}
+  .spoke .lbl{font-size:9.5px;letter-spacing:.12em;color:var(--faint)}
+  .spoke .val{font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;
+              white-space:nowrap}
+  .stack{width:100%;margin-top:1px;background:var(--rule);display:grid;gap:1px;
+         grid-template-columns:1fr 1fr}
+
+  /* -- event stream ------------------------------------------------------ */
+  .ev{display:grid;grid-template-columns:auto auto 1fr;gap:9px;padding:2px 0;
+      border-bottom:1px solid #162224;font-size:11.5px;align-items:baseline}
+  .ev:last-child{border-bottom:0}
+  .ev .t{color:var(--faint);font-variant-numeric:tabular-nums}
+  .ev .ty{color:var(--accent);white-space:nowrap}
+  .ev .ty.warn{color:var(--warn)} .ev .ty.bad{color:var(--bad)}
+  .ev .d{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* -- tools / audit ----------------------------------------------------- */
+  .row{display:grid;grid-template-columns:1fr auto;gap:10px;padding:3px 0;
+       border-bottom:1px solid #162224;font-size:11.5px;align-items:baseline}
+  .row:last-child{border-bottom:0}
+  .row .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tag{font-size:9.5px;letter-spacing:.08em;padding:1px 6px;border-radius:2px;
+       border:1px solid var(--rule);color:var(--dim);white-space:nowrap}
+  .tag.allow{color:var(--ok);border-color:#1D3A2B}
+  .tag.confirm{color:var(--warn);border-color:#3A3020}
+  .tag.deny{color:var(--bad);border-color:#3A2523}
+
+  /* -- approvals --------------------------------------------------------- */
+  .appr{border:1px solid var(--warn);background:#1C1810;padding:10px 12px;
+        border-radius:2px;margin-bottom:9px}
+  .appr .tool{color:var(--warn);font-size:12px}
+  .appr .sum{color:var(--ink);font-size:11.5px;margin:5px 0 9px;word-break:break-word}
+  .appr .acts{display:flex;gap:7px}
+
+  /* -- token gate -------------------------------------------------------- */
+  .gate{position:fixed;inset:0;background:rgba(10,16,18,.97);display:grid;
+        place-items:center;padding:20px;z-index:10}
+  .gate form{background:var(--panel);border:1px solid var(--rule);padding:22px;
+             max-width:440px;width:100%;border-radius:3px}
+  .gate h1{margin:0 0 6px;font-size:14px;letter-spacing:.2em;color:var(--accent)}
+  .gate p{margin:0 0 14px;color:var(--dim);font-size:11.5px;line-height:1.6}
+  .gate code{color:var(--ink);background:var(--panel-2);padding:1px 5px;border-radius:2px}
+  .gate input{width:100%;font-family:var(--mono);font-size:12px;padding:8px 10px;
+              background:var(--bg);border:1px solid var(--rule);color:var(--ink);
+              border-radius:2px;margin-bottom:10px}
+  .gate input:focus{outline:none;border-color:var(--accent)}
+  .gate .err{color:var(--bad);font-size:11.5px;min-height:17px;margin:0 0 8px}
+</style>
+</head>
+<body>
+
+<div class="gate" id="gate" hidden>
+  <form id="gate-form">
+    <h1>AURA</h1>
+    <p>This console reads AURA's local API, which requires her bearer token.
+       It is in <code>var/secrets/api_token</code>. Stored in this browser only,
+       and never sent anywhere but <code>127.0.0.1</code>.</p>
+    <input id="token-input" type="password" autocomplete="off" spellcheck="false"
+           placeholder="bearer token" aria-label="API token">
+    <p class="err" id="gate-err"></p>
+    <button type="submit">Connect</button>
+  </form>
+</div>
+
+<div class="app">
+  <header>
+    <span class="brand">AURA</span>
+    <span class="hstat"><i class="dot" id="d-stream"></i><span>stream</span> <b id="v-stream">offline</b></span>
+    <span class="hstat"><i class="dot" id="d-model"></i><span>model</span> <b id="v-model">—</b></span>
+    <span class="hstat"><span>uptime</span> <b id="v-uptime">—</b></span>
+    <span class="hgap"></span>
+    <span class="hstat" id="estop-wrap" hidden><i class="dot bad"></i><b style="color:var(--bad)">EMERGENCY STOP ENGAGED</b></span>
+    <button id="btn-estop" class="danger">ENGAGE STOP</button>
+    <button id="btn-forget">Forget token</button>
+  </header>
+
+  <main>
+    <!-- ---------------- column 1 ---------------- -->
+    <section class="panel" data-source="api:/v1/status">
+      <h2>SYSTEM <span class="src">/v1/status</span></h2>
+      <div class="body">
+        <dl class="kv" id="p-system"><dd class="unlit">waiting for the API…</dd></dl>
+      </div>
+    </section>
+
+    <section class="panel" data-source="api:/v1/tools">
+      <h2>TOOLS &amp; POLICY <span class="src">/v1/tools</span></h2>
+      <div class="body" id="p-tools"><p class="empty">waiting…</p></div>
+    </section>
+
+    <!-- ---------------- column 2 ---------------- -->
+    <section class="panel span2" data-source="event:presence_state">
+      <h2>AURA CORE <span class="src">/v1/events</span></h2>
+      <div class="body">
+        <div class="core">
+          <div class="ring" id="core-ring">◉</div>
+          <div class="state" id="core-state">disconnected</div>
+        </div>
+        <div class="spokes">
+          <div class="spoke"><div class="lbl">MEMORY</div><div class="val unlit" id="s-memory">—</div></div>
+          <div class="spoke"><div class="lbl">AGENT</div><div class="val unlit" id="s-agent">—</div></div>
+          <div class="spoke"><div class="lbl">MODEL</div><div class="val unlit" id="s-model">—</div></div>
+        </div>
+        <div class="stack">
+          <div class="spoke"><div class="lbl">TASK</div><div class="val unlit" id="s-task">idle</div></div>
+          <div class="spoke"><div class="lbl">VOICE</div><div class="val unlit" id="s-voice">—</div></div>
+          <div class="spoke"><div class="lbl">VISION</div><div class="val unlit" id="s-vision">—</div></div>
+          <div class="spoke"><div class="lbl">FOCUS</div><div class="val unlit" id="s-focus">—</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- column 3 ---------------- -->
+    <section class="panel" data-source="event:permission_required">
+      <h2>APPROVALS <span class="src">/v1/approvals</span></h2>
+      <div class="body" id="p-approvals"><p class="empty">nothing waiting on you</p></div>
+    </section>
+
+    <section class="panel" data-source="api:/v1/audit">
+      <h2>SECURITY / AUDIT <span class="src">/v1/audit</span></h2>
+      <div class="body" id="p-audit"><p class="empty">waiting…</p></div>
+    </section>
+
+    <!-- ---------------- row 2 ---------------- -->
+    <section class="panel" data-source="api:/v1/events">
+      <h2>EVENT STREAM <span class="src">/v1/events</span></h2>
+      <div class="body" id="p-events"><p class="empty">not connected</p></div>
+    </section>
+  </main>
+</div>
+
+<script>
+"use strict";
+
+// -- token ------------------------------------------------------------------
+// localStorage rather than a cookie: a cookie would be sent automatically on
+// every request to the API, including ones this page did not make.
+
+const KEY = "aura.token";
+let token = "";
+try { token = localStorage.getItem(KEY) || ""; } catch (e) { token = ""; }
+
+const $ = (id) => document.getElementById(id);
+
+function showGate(message) {
+  $("gate").hidden = false;
+  $("gate-err").textContent = message || "";
+  $("token-input").focus();
+}
+
+$("gate-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const candidate = $("token-input").value.trim();
+  if (!candidate) return;
+  $("gate-err").textContent = "checking…";
+  try {
+    const r = await fetch("/v1/status", { headers: { Authorization: "Bearer " + candidate } });
+    if (r.status === 401 || r.status === 403) { $("gate-err").textContent = "That token was refused."; return; }
+    if (!r.ok) { $("gate-err").textContent = "API error " + r.status + "."; return; }
+  } catch (err) {
+    $("gate-err").textContent = "Could not reach AURA. Is Core running?";
+    return;
+  }
+  token = candidate;
+  try { localStorage.setItem(KEY, token); } catch (e) { /* private window; session only */ }
+  $("gate").hidden = true;
+  start();
+});
+
+$("btn-forget").addEventListener("click", () => {
+  try { localStorage.removeItem(KEY); } catch (e) {}
+  location.reload();
+});
+
+const api = (path, init) => fetch(path, {
+  ...init,
+  headers: { ...(init && init.headers), Authorization: "Bearer " + token },
+});
+
+// -- helpers ----------------------------------------------------------------
+
+const clock = (iso) => {
+  const d = iso ? new Date(iso) : new Date();
+  return isNaN(d) ? "--:--:--" : d.toTimeString().slice(0, 8);
+};
+const esc = (s) => String(s == null ? "" : s).replace(/[<>&"]/g,
+  (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
+
+function lit(el, text) {           // a value arrived
+  el.textContent = text;
+  el.classList.remove("unlit");
+}
+function unlit(el, text) {         // no value: say so, never invent one
+  el.textContent = text;
+  el.classList.add("unlit");
+}
+function uptime(s) {
+  s = Math.floor(s || 0);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`;
+}
+function meter(used, total, unit) {
+  if (total == null || !isFinite(total) || total <= 0) return null;
+  const pct = Math.max(0, Math.min(100, (used / total) * 100));
+  const cls = pct > 90 ? "bad" : pct > 75 ? "warn" : "";
+  return `<span>${used.toFixed(1)} / ${total.toFixed(0)} ${unit}</span>
+          <div class="bar"><i class="${cls}" style="width:${pct.toFixed(1)}%"></i></div>`;
+}
+
+// -- status poll ------------------------------------------------------------
+
+let statusTimer = null;
+
+async function pollStatus() {
+  try {
+    const r = await api("/v1/status");
+    if (r.status === 401 || r.status === 403) { stop(); showGate("The token stopped working."); return; }
+    if (!r.ok) throw new Error("status " + r.status);
+    renderStatus(await r.json());
+  } catch (err) {
+    $("d-model").className = "dot bad";
+    $("v-model").textContent = "unreachable";
+  }
+}
+
+function renderStatus(s) {
+  const p = s.provider || {}, r = s.resources || {};
+
+  $("v-model").textContent = p.model || p.name || "—";
+  $("d-model").className = "dot " + (p.available ? "ok" : "bad");
+  $("v-uptime").textContent = uptime(s.uptime_s);
+
+  $("estop-wrap").hidden = !s.emergency_stop;
+  $("btn-estop").textContent = s.emergency_stop ? "RELEASE STOP" : "ENGAGE STOP";
+  $("btn-estop").className = s.emergency_stop ? "go" : "danger";
+
+  const ring = $("core-ring");
+  if (s.emergency_stop) {
+    ring.className = "ring bad";
+    if ($("core-state").dataset.presence !== "1") $("core-state").textContent = "stopped";
+  } else if (ring.className === "ring bad") {
+    ring.className = "ring live";
+  }
+
+  const mem = s.memory || {};
+  const memBits = [mem.facts, mem.sessions].filter((v) => v != null);
+  if (memBits.length) lit($("s-memory"), `${mem.facts ?? "?"} facts`);
+  lit($("s-model"), p.model || p.name || "—");
+
+  const rows = [];
+  const push = (k, v) => rows.push(`<dt>${k}</dt><dd>${v}</dd>`);
+
+  push("CPU", r.cpu_percent != null
+    ? `${r.cpu_percent.toFixed(0)}%<div class="bar"><i class="${r.cpu_percent > 90 ? "bad" : r.cpu_percent > 75 ? "warn" : ""}" style="width:${r.cpu_percent}%"></i></div>`
+    : `<span class="unlit">n/a</span>`);
+
+  const ram = meter(r.ram_used_gb, r.ram_total_gb, "GB");
+  push("RAM", ram || `<span class="unlit">n/a</span>`);
+
+  // VRAM comes from nvidia-smi and is legitimately absent on a machine with no
+  // NVIDIA GPU. "n/a" is the honest render; a zeroed bar would not be.
+  const vram = meter(r.vram_used_gb, r.vram_total_gb, "GB");
+  push("VRAM", vram || `<span class="unlit">no NVIDIA GPU</span>`);
+
+  push("AURA Core", r.process_ram_mb != null
+    ? `${r.process_ram_mb.toFixed(0)} MB` : `<span class="unlit">n/a</span>`);
+  push("provider", esc(p.kind || p.name || "—"));
+  push("latency", p.latency_ms != null ? `${p.latency_ms} ms` : `<span class="unlit">—</span>`);
+  push("version", esc(s.version || "—"));
+
+  $("p-system").innerHTML = rows.join("");
+}
+
+// -- tools + audit ----------------------------------------------------------
+
+const LEVELS = ["observe", "read", "act", "mutate", "critical"];
+
+async function loadTools() {
+  try {
+    const r = await api("/v1/tools");
+    if (!r.ok) throw new Error();
+    const tools = await r.json();
+    if (!tools.length) { $("p-tools").innerHTML = `<p class="empty">no tools registered</p>`; return; }
+    $("p-tools").innerHTML = tools.map((t) => {
+      const lvl = LEVELS[t.level] || String(t.level);
+      const cls = t.level >= 4 ? "deny" : t.needs_confirmation ? "confirm" : "allow";
+      const what = t.level >= 4 ? "DENIED" : t.needs_confirmation ? "APPROVAL" : "ALLOWED";
+      return `<div class="row"><span class="name">${esc(t.name)}</span>
+              <span><span class="tag">${esc(lvl)}</span>
+              <span class="tag ${cls}">${what}</span></span></div>`;
+    }).join("");
+  } catch (e) {
+    $("p-tools").innerHTML = `<p class="empty">could not read the tool registry</p>`;
+  }
+}
+
+async function loadAudit() {
+  try {
+    const r = await api("/v1/audit?limit=40");
+    if (!r.ok) throw new Error();
+    const rows = await r.json();
+    if (!rows.length) { $("p-audit").innerHTML = `<p class="empty">no audit entries yet</p>`; return; }
+    $("p-audit").innerHTML = rows.map((a) => {
+      const d = String(a.decision || "").toLowerCase();
+      const cls = d === "deny" ? "deny" : d === "confirm" ? "confirm" : d === "error" ? "deny" : "allow";
+      return `<div class="row"><span class="name">${esc(a.action || "?")}
+              <span style="color:var(--faint)">${esc(a.target || "")}</span></span>
+              <span class="tag ${cls}">${esc(a.decision || "?")}</span></div>`;
+    }).join("");
+  } catch (e) {
+    $("p-audit").innerHTML = `<p class="empty">could not read the audit log</p>`;
+  }
+}
+
+// -- approvals --------------------------------------------------------------
+// The nonce path, unchanged: the bus says a permission is required and carries
+// the nonce; granting travels back over authenticated HTTP. The bus cannot
+// grant anything, and this page does not change that.
+
+const approvals = new Map();
+
+function renderApprovals() {
+  const el = $("p-approvals");
+  if (!approvals.size) { el.innerHTML = `<p class="empty">nothing waiting on you</p>`; return; }
+  el.innerHTML = [...approvals.values()].map((a) => `
+    <div class="appr">
+      <div class="tool">${esc(a.tool || "?")} <span class="tag">level ${esc(a.level)}</span></div>
+      <div class="sum">${esc(a.summary || "")}</div>
+      <div class="acts">
+        <button class="go" data-approve="${esc(a.approval_id)}">APPROVE</button>
+        <button class="danger" data-deny="${esc(a.approval_id)}">DENY</button>
+      </div>
+    </div>`).join("");
+}
+
+$("p-approvals").addEventListener("click", async (e) => {
+  const yes = e.target.getAttribute("data-approve");
+  const no = e.target.getAttribute("data-deny");
+  const id = yes || no;
+  if (!id) return;
+  const a = approvals.get(id);
+  if (!a) return;
+  e.target.disabled = true;
+  try {
+    const r = await api("/v1/approvals/" + encodeURIComponent(id), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nonce: a.nonce, request_id: a.request_id, granted: !!yes }),
+    });
+    if (!r.ok) { e.target.disabled = false; e.target.textContent = "FAILED " + r.status; return; }
+    approvals.delete(id);
+    renderApprovals();
+    loadAudit();
+  } catch (err) {
+    e.target.disabled = false;
+    e.target.textContent = "FAILED";
+  }
+});
+
+// -- emergency stop ---------------------------------------------------------
+
+$("btn-estop").addEventListener("click", async () => {
+  const engaging = $("btn-estop").textContent.startsWith("ENGAGE");
+  if (engaging && !confirm("Engage the emergency stop? AURA will refuse every tool call until it is released.")) return;
+  try {
+    await api("/v1/control/estop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ engaged: engaging }),
+    });
+  } catch (e) { /* the poll will show the real state either way */ }
+  pollStatus();
+});
+
+// -- the event stream -------------------------------------------------------
+// fetch + a stream reader, not EventSource: EventSource cannot set an
+// Authorization header, and a token in the query string ends up in every
+// access log.
+
+let lastId = null;
+let streamAbort = null;
+let backoff = 1000;
+const MAX_EVENTS = 200;
+
+function setStream(state, cls) {
+  $("v-stream").textContent = state;
+  $("d-stream").className = "dot " + cls;
+}
+
+async function stream() {
+  streamAbort = new AbortController();
+  const headers = {};
+  if (lastId != null) headers["Last-Event-ID"] = String(lastId);
+
+  let res;
+  try {
+    res = await api("/v1/events", { headers, signal: streamAbort.signal });
+  } catch (err) {
+    if (streamAbort.signal.aborted) return;
+    return reconnect();
+  }
+  if (res.status === 401 || res.status === 403) { stop(); showGate("The token stopped working."); return; }
+  if (!res.ok || !res.body) return reconnect();
+
+  setStream("live", "live");
+  backoff = 1000;
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let cut;
+      while ((cut = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, cut);
+        buffer = buffer.slice(cut + 2);
+        if (frame.startsWith(":")) continue;          // keepalive
+
+        let id = null, type = "message", data = "";
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("id:")) id = line.slice(3).trim();
+          else if (line.startsWith("event:")) type = line.slice(6).trim();
+          else if (line.startsWith("data:")) data += line.slice(5).trim();
+        }
+        if (id != null) lastId = id;
+        let payload = {};
+        try { payload = data ? JSON.parse(data) : {}; } catch (e) { payload = {}; }
+        handle(type, payload);
+      }
+    }
+  } catch (err) {
+    if (streamAbort.signal.aborted) return;
+  }
+  reconnect();
+}
+
+function reconnect() {
+  if (streamAbort && streamAbort.signal.aborted) return;
+  setStream("reconnecting", "warn");
+  const wait = backoff;
+  backoff = Math.min(backoff * 2, 15000);
+  setTimeout(() => { if (token) stream(); }, wait);
+}
+
+function stop() {
+  if (streamAbort) streamAbort.abort();
+  if (statusTimer) clearInterval(statusTimer);
+  statusTimer = null;
+  setStream("offline", "");
+}
+
+// -- event handling ---------------------------------------------------------
+
+const WARN_EVENTS = new Set(["permission_required", "agent_waiting", "resource_pressure", "user_interrupted"]);
+const BAD_EVENTS = new Set(["task_failed", "error"]);
+
+function handle(type, ev) {
+  const payload = ev.payload || ev.data || ev || {};
+
+  if (type === "snapshot") {
+    applySnapshot(payload);
+    logEvent(type, "reconnected; state restored");
+    return;
+  }
+
+  switch (type) {
+    case "presence_state":
+      setPresence(payload.presence_state || payload.state);
+      break;
+    case "task_started":
+      lit($("s-task"), payload.name || payload.task || "running");
+      lit($("s-agent"), "working");
+      break;
+    case "task_completed":
+      unlit($("s-task"), "idle");
+      unlit($("s-agent"), "—");
+      loadAudit();
+      break;
+    case "task_failed":
+      lit($("s-task"), "failed");
+      unlit($("s-agent"), "—");
+      loadAudit();
+      break;
+    case "agent_thinking":
+      lit($("s-agent"), "thinking");
+      break;
+    case "agent_waiting":
+      lit($("s-agent"), "waiting: " + (payload.reason || payload.on || "?"));
+      break;
+    case "speech_started":
+      lit($("s-voice"), "speaking");
+      break;
+    case "speech_ended":
+      unlit($("s-voice"), "—");
+      break;
+    case "user_spoke":
+      lit($("s-voice"), "heard you");
+      break;
+    case "user_interrupted":
+      lit($("s-voice"), "interrupted");
+      break;
+    case "private_mode":
+      setVision(payload.vision_mode || payload.mode);
+      break;
+    case "permission_required":
+      if (payload.approval_id) { approvals.set(payload.approval_id, payload); renderApprovals(); }
+      break;
+    case "focus_mode":
+      setFocus(payload.focus_mode);
+      break;
+    case "vlm_observation":
+      // Catalogued but unreachable: 10C.1 put the VLMProvider seam in and
+      // nothing calls it, so this cannot fire today. Logged as a stream line
+      // rather than given a panel -- a panel for an event that never arrives
+      // is exactly the kind of decoration this console refuses. Give it one
+      // when 10C.5 lands `StructuredObservation`.
+      break;
+    case "speech_chunk":
+      return;  // too frequent to log; it drives the subtitle, not this console
+  }
+  logEvent(type, describe(type, payload));
+}
+
+function applySnapshot(s) {
+  if (s.presence_state) setPresence(s.presence_state);
+  if (s.vision_mode) setVision(s.vision_mode);
+  if (s.focus_mode != null) setFocus(s.focus_mode);
+  if (s.foreground_application) lit($("s-agent"), "—");
+  approvals.clear();
+  renderApprovals();
+}
+
+function setPresence(state) {
+  if (!state) return;
+  const el = $("core-state");
+  el.textContent = String(state).toLowerCase();
+  el.dataset.presence = "1";
+  const ring = $("core-ring");
+  if (ring.className !== "ring bad") ring.className = "ring live";
+  lit($("s-voice"), String(state).toLowerCase());
+}
+
+function setFocus(on) {
+  if (on == null) return;
+  if (on === true || on === "true" || on === "on") lit($("s-focus"), "do not disturb");
+  else unlit($("s-focus"), "off");
+}
+
+function setVision(mode) {
+  if (!mode) return;
+  const m = String(mode).toLowerCase();
+  if (m === "private" || m === "off") lit($("s-vision"), "private");
+  else lit($("s-vision"), m);
+}
+
+function describe(type, p) {
+  if (type === "permission_required") return `${p.tool || "?"} — ${p.summary || ""}`;
+  if (type === "task_started" || type === "task_completed" || type === "task_failed")
+    return p.name || p.task || "";
+  if (type === "app_changed") return p.foreground_application || "";
+  if (type === "error") return p.message || p.error || "";
+  if (type === "user_spoke") return p.text ? String(p.text).slice(0, 80) : "";
+  const keys = Object.keys(p || {});
+  return keys.length ? `${keys[0]}=${String(p[keys[0]]).slice(0, 48)}` : "";
+}
+
+function logEvent(type, detail) {
+  const box = $("p-events");
+  if (box.firstElementChild && box.firstElementChild.className === "empty") box.innerHTML = "";
+  const cls = BAD_EVENTS.has(type) ? "bad" : WARN_EVENTS.has(type) ? "warn" : "";
+  const row = document.createElement("div");
+  row.className = "ev";
+  row.innerHTML = `<span class="t">${clock()}</span>
+                   <span class="ty ${cls}">${esc(type)}</span>
+                   <span class="d">${esc(detail || "")}</span>`;
+  box.prepend(row);
+  while (box.childElementCount > MAX_EVENTS) box.lastElementChild.remove();
+}
+
+// -- boot -------------------------------------------------------------------
+
+function start() {
+  pollStatus();
+  loadTools();
+  loadAudit();
+  statusTimer = setInterval(pollStatus, 2000);
+  stream();
+}
+
+if (token) start(); else showGate();
+</script>
+</body>
+</html>
