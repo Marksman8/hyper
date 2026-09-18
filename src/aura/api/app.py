@@ -154,7 +154,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             from aura.tools.factory import build_context, build_executor
             from aura.tools.runner import ExecutorToolRunner
 
-            tools = build_executor(cfg, audit, events=emitter, estop=estop)
+            tools = build_executor(cfg, audit, events=emitter, estop=estop, store=store)
             runner = ExecutorToolRunner(tools, build_context(cfg))
 
         app.state.aura = AppState(

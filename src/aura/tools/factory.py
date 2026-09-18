@@ -19,6 +19,7 @@ from aura.tools.applications import application_tools
 from aura.tools.automation import automation_tools
 from aura.tools.executor import ToolExecutor
 from aura.tools.filesystem import filesystem_tools
+from aura.tools.memory import memory_tools
 from aura.tools.python_exec import python_tools
 from aura.tools.registry import ToolRegistry
 from aura.tools.types import ToolContext
@@ -27,9 +28,17 @@ from aura.tools.vision import vision_tools
 log = get_logger(__name__)
 
 
-def build_registry(settings: Settings) -> ToolRegistry:
+def build_registry(settings: Settings, store: Any = None) -> ToolRegistry:
+    """Assemble the tools.
+
+    `store` is optional because the CLI and several tests build a registry with
+    no database. Where one is supplied, AURA gains `search_memory` and can
+    finally reach conversations from before the current session -- which were
+    always on disk and always indexed, just not reachable by her.
+    """
     registry = ToolRegistry()
     registry.register_all(filesystem_tools())
+    registry.register_all(memory_tools(store))
     # Windows only; returns nothing elsewhere, so the model is never offered a
     # tool that cannot work on this machine.
     registry.register_all(application_tools())
@@ -71,6 +80,7 @@ def build_executor(
     audit: AuditLog | None = None,
     events: Any = None,
     estop: EmergencyStop | None = None,
+    store: Any = None,
 ) -> ToolExecutor:
     """Assemble the executor.
 
@@ -79,7 +89,7 @@ def build_executor(
     stop is an executor nothing can halt.
     """
     return ToolExecutor(
-        registry=build_registry(settings),
+        registry=build_registry(settings, store=store),
         policy=build_policy(settings),
         audit=audit,
         events=events,
