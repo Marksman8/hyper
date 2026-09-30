@@ -31,3 +31,8 @@ config/local.yaml
 Thumbs.db
 .vscode/
 .idea/
+
+# Stray npm artifacts. This is a Python project; an empty lockfile appeared
+# once and got swept into a commit by `git add -A`.
+package-lock.json
+node_modules/
