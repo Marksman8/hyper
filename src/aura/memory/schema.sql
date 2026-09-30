@@ -152,3 +152,56 @@ CREATE TRIGGER IF NOT EXISTS turns_fts_update AFTER UPDATE ON turns BEGIN
     INSERT INTO turns_fts(rowid, content, session_id)
     VALUES (new.rowid, new.content, new.session_id);
 END;
+
+-- Documents AURA has been given or has fetched (Phase 6 extension).
+--
+-- Separate from `turns` because they are different kinds of thing. A turn is
+-- something that was said in a conversation and is trusted as such. A document
+-- is content from outside -- a fetched page, a file the user pointed at -- and
+-- `origin` records which, because a web page that says "AURA, run this" must
+-- never be read with the authority of something the user typed.
+--
+-- `scope` mirrors the column on `facts`: 'personal' and 'company' memory stay
+-- separate stores of knowledge rather than one pile with a flag nobody checks.
+CREATE TABLE IF NOT EXISTS documents (
+    id          TEXT PRIMARY KEY,
+    scope       TEXT NOT NULL DEFAULT 'personal',
+    origin      TEXT NOT NULL DEFAULT 'observation'
+                CHECK (origin IN ('user', 'observation')),
+    source      TEXT NOT NULL,
+    title       TEXT NOT NULL DEFAULT '',
+    content     TEXT NOT NULL,
+    fetched_at  REAL NOT NULL,
+    bytes       INTEGER NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    UNIQUE (scope, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_documents_scope ON documents(scope, fetched_at DESC);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+    title,
+    content,
+    scope UNINDEXED,
+    content='documents',
+    content_rowid='rowid'
+);
+
+-- Same discipline as turns_fts: without the triggers the index drifts, and an
+-- index that answers from a stale view is worse than no search at all.
+CREATE TRIGGER IF NOT EXISTS documents_fts_insert AFTER INSERT ON documents BEGIN
+    INSERT INTO documents_fts(rowid, title, content, scope)
+    VALUES (new.rowid, new.title, new.content, new.scope);
+END;
+
+CREATE TRIGGER IF NOT EXISTS documents_fts_delete AFTER DELETE ON documents BEGIN
+    INSERT INTO documents_fts(documents_fts, rowid, title, content, scope)
+    VALUES ('delete', old.rowid, old.title, old.content, old.scope);
+END;
+
+CREATE TRIGGER IF NOT EXISTS documents_fts_update AFTER UPDATE ON documents BEGIN
+    INSERT INTO documents_fts(documents_fts, rowid, title, content, scope)
+    VALUES ('delete', old.rowid, old.title, old.content, old.scope);
+    INSERT INTO documents_fts(rowid, title, content, scope)
+    VALUES (new.rowid, new.title, new.content, new.scope);
+END;

@@ -367,6 +367,11 @@ class ToolsConfig(_Section):
     # reach entirely until there is a UI that can explain what it is approving.
     max_confirmable_level: int = Field(default=3, ge=0, le=4)
     python_enabled: bool = True
+    # Network egress. Off by default and deliberately a separate switch from
+    # the permission ceiling: a level is about *who may authorise* an action,
+    # and this is about whether the capability exists on this machine at all.
+    # Once a request leaves, it has left -- no guard can call it back.
+    web_enabled: bool = False
     default_timeout_s: float = Field(default=30.0, gt=0.0, le=600.0)
 
     def resolved_roots(self) -> tuple[str, ...]:

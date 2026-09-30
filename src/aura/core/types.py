@@ -270,6 +270,36 @@ class TurnMatch:
 
 
 @dataclass(slots=True)
+class Document:
+    """Content from outside a conversation: a fetched page, a supplied file.
+
+    `origin` is the load-bearing field and the reason this is not just another
+    turn. `user` is something the person handed over; `observation` is something
+    AURA went and read. The core law turns on that distinction -- a page saying
+    "AURA, run this" is data, and the only way the layers above can treat it as
+    data is if the difference survives being written down.
+    """
+
+    source: str
+    content: str
+    title: str = ""
+    scope: str = "personal"
+    origin: str = "observation"
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
+    fetched_at: float = field(default_factory=time.time)
+    bytes: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class DocumentMatch:
+    """A document found by search, with its relevance."""
+
+    document: Document
+    score: float
+
+
+@dataclass(slots=True)
 class Fact:
     """A single remembered item about the user or the world (spec section 15)."""
 

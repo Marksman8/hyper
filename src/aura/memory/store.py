@@ -23,14 +23,24 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from aura.core.types import Evidence, Fact, Permanence, Role, Session, Turn, TurnMatch
+from aura.core.types import (
+    Document,
+    DocumentMatch,
+    Evidence,
+    Fact,
+    Permanence,
+    Role,
+    Session,
+    Turn,
+    TurnMatch,
+)
 from aura.errors import NotFoundError, StorageError
 from aura.logging import get_logger
 from aura.memory.beliefs import assess
 
 log = get_logger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
@@ -91,6 +101,28 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # said before today is worse than no search, so rebuild it once.
         log.info("memory.migrating", from_version=current, to_version=3)
         conn.execute("INSERT INTO turns_fts(turns_fts) VALUES('rebuild')")
+
+    if current < 4:
+        # v4 added `documents` and its FTS index. Same reasoning as v3: the
+        # table is created by schema.sql on every connect, but an index built
+        # over an existing table starts empty because the triggers only see
+        # rows written from now on. Rebuilding is cheap and wrong-once is not.
+        log.info("memory.migrating", from_version=current, to_version=4)
+        conn.execute("INSERT INTO documents_fts(documents_fts) VALUES('rebuild')")
+
+
+def _row_to_document(r: sqlite3.Row) -> Document:
+    return Document(
+        id=r["id"],
+        scope=r["scope"],
+        origin=r["origin"],
+        source=r["source"],
+        title=r["title"],
+        content=r["content"],
+        fetched_at=r["fetched_at"],
+        bytes=r["bytes"],
+        metadata=_loads(r["metadata_json"]),
+    )
 
 
 def _loads(raw: str | None) -> dict[str, Any]:
@@ -553,6 +585,119 @@ class MemoryStore:
             )
             for r in rows
         ]
+
+    # -- documents -----------------------------------------------------------
+
+    async def put_document(self, doc: Document) -> Document:
+        """Store or replace a document, keyed by (scope, source).
+
+        Replacing rather than appending: fetching the same URL twice should
+        update what AURA knows about that page, not leave two versions for
+        search to rank against each other.
+        """
+
+        def _write() -> None:
+            self._db.execute(
+                "INSERT INTO documents(id, scope, origin, source, title, content, "
+                "fetched_at, bytes, metadata_json) VALUES (?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(scope, source) DO UPDATE SET "
+                "  origin = excluded.origin, title = excluded.title, "
+                "  content = excluded.content, fetched_at = excluded.fetched_at, "
+                "  bytes = excluded.bytes, metadata_json = excluded.metadata_json",
+                (
+                    doc.id,
+                    doc.scope,
+                    doc.origin,
+                    doc.source,
+                    doc.title,
+                    doc.content,
+                    doc.fetched_at,
+                    doc.bytes,
+                    json.dumps(doc.metadata),
+                ),
+            )
+            self._db.commit()
+
+        await self._run(_write)
+        log.info(
+            "memory.document_stored",
+            source=doc.source,
+            scope=doc.scope,
+            origin=doc.origin,
+            bytes=doc.bytes,
+        )
+        stored = await self.get_document(doc.scope, doc.source)
+        return stored or doc
+
+    async def get_document(self, scope: str, source: str) -> Document | None:
+        def _read() -> sqlite3.Row | None:
+            cur = self._db.execute(
+                "SELECT * FROM documents WHERE scope = ? AND source = ?", (scope, source)
+            )
+            row: sqlite3.Row | None = cur.fetchone()
+            return row
+
+        row = await self._run(_read)
+        return _row_to_document(row) if row else None
+
+    async def list_documents(self, scope: str | None = None, limit: int = 50) -> list[Document]:
+        def _read() -> list[sqlite3.Row]:
+            if scope is None:
+                return self._db.execute(
+                    "SELECT * FROM documents ORDER BY fetched_at DESC LIMIT ?", (limit,)
+                ).fetchall()
+            return self._db.execute(
+                "SELECT * FROM documents WHERE scope = ? ORDER BY fetched_at DESC LIMIT ?",
+                (scope, limit),
+            ).fetchall()
+
+        return [_row_to_document(r) for r in await self._run(_read)]
+
+    async def search_documents(
+        self, query: str, limit: int = 8, scope: str | None = None
+    ) -> list[DocumentMatch]:
+        """BM25 search over stored documents.
+
+        Returns [] for an unparseable query rather than raising, for the same
+        reason `search_turns` does: FTS5 treats bare punctuation as a syntax
+        error and a question must never become a 500.
+        """
+        cleaned = _fts_query(query)
+        if not cleaned:
+            return []
+
+        def _read() -> list[sqlite3.Row]:
+            sql = (
+                "SELECT d.*, bm25(documents_fts) AS score FROM documents_fts "
+                "JOIN documents d ON d.rowid = documents_fts.rowid "
+                "WHERE documents_fts MATCH ? "
+            )
+            params: list[Any] = [cleaned]
+            if scope:
+                sql += "AND d.scope = ? "
+                params.append(scope)
+            sql += "ORDER BY score LIMIT ?"
+            params.append(limit)
+            try:
+                return self._db.execute(sql, params).fetchall()
+            except sqlite3.OperationalError as exc:
+                log.warning("memory.doc_search_failed", query=cleaned, error=str(exc))
+                return []
+
+        rows = await self._run(_read)
+        return [DocumentMatch(document=_row_to_document(r), score=float(r["score"])) for r in rows]
+
+    async def forget_document(self, scope: str, source: str) -> bool:
+        def _delete() -> int:
+            cur = self._db.execute(
+                "DELETE FROM documents WHERE scope = ? AND source = ?", (scope, source)
+            )
+            self._db.commit()
+            return cur.rowcount
+
+        deleted = await self._run(_delete)
+        log.info("memory.document_deleted", scope=scope, source=source, deleted=bool(deleted))
+        return bool(deleted)
 
     # -- audit ---------------------------------------------------------------
 

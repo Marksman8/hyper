@@ -24,6 +24,7 @@ from aura.tools.python_exec import python_tools
 from aura.tools.registry import ToolRegistry
 from aura.tools.types import ToolContext
 from aura.tools.vision import vision_tools
+from aura.tools.web import web_tools
 
 log = get_logger(__name__)
 
@@ -39,6 +40,8 @@ def build_registry(settings: Settings, store: Any = None) -> ToolRegistry:
     registry = ToolRegistry()
     registry.register_all(filesystem_tools())
     registry.register_all(memory_tools(store))
+    # Nothing registered unless tools.web_enabled is true.
+    registry.register_all(web_tools(settings, store))
     # Windows only; returns nothing elsewhere, so the model is never offered a
     # tool that cannot work on this machine.
     registry.register_all(application_tools())
