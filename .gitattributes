@@ -1,0 +1,18 @@
+# One line ending in the repository, whatever the checkout does locally.
+#
+# Every commit on Windows warned "LF will be replaced by CRLF the next time git
+# touches it". Harmless, and noise that trains you to ignore git's output --
+# which is the last habit to want in a project whose security model is read out
+# of diffs.
+* text=auto eol=lf
+
+# Binary: never normalise, never diff as text.
+*.png    binary
+*.jpg    binary
+*.wav    binary
+*.gguf   binary
+*.onnx   binary
+*.ico    binary
+
+# Windows-only scripts genuinely want CRLF.
+*.ps1    text eol=crlf

@@ -7,14 +7,25 @@ AURA runs entirely on your own machine. Its intelligence comes from open-weight
 models served locally; no hosted API is required for normal operation, and the
 model underneath is a configuration value, not a code dependency.
 
-> **Current scope.** v0.1: conversation, persistent memory, local API, CLI.
-> Phase 2 (voice): wake word, speech in, speech out, barge-in.
-> Phase 3 (tools): filesystem and Python behind permission levels 0–4.
-> Phase 4 (agent): the model picks its own tools and loops until it can answer,
-> under a step budget it does not control.
-> v0.1.1 (desktop): tray icon, status overlay, and approval prompts.
-> No vision yet — see [the roadmap](docs/ROADMAP.md) and
-> [known issues](docs/KNOWN-ISSUES.md).
+> **Current scope.** Phases v0.1 through 9 are complete, and Phase 10 is
+> complete through 10B.
+>
+> Working: conversation, persistent memory with evidence, local API, CLI,
+> desktop overlay and tray, the full voice loop (wake word, STT, TTS, a
+> personality engine, and an interrupt that works), tools behind permission
+> levels 0–4, a bounded agent loop, screen capture and OCR behind privacy
+> controls that stop the pipeline rather than instruct the model, an evaluation
+> harness that refuses to overclaim, config-space hill-climbing under a human
+> gate, an event bus, an operator console at `/hud`, conversation recall across
+> sessions, and fetching and storing web pages.
+>
+> In progress: 10C (VLM perception) is 2 of 12 and ends at 10C.6 by decision --
+> computer use is deferred with the condition that would revive it. 10D is not
+> started.
+>
+> See [the roadmap](docs/ROADMAP.md), [known issues](docs/KNOWN-ISSUES.md), and
+> [the security audit](docs/SECURITY-AUDIT-01.md), which records one finding
+> still open and why it was deferred.
 
 ---
 
